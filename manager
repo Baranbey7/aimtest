@@ -1,0 +1,1100 @@
+--[[
+    Geliştirilmiş HyperAim Sistemi v3.0
+    Yazar:[Wanda Nara]
+    Tarih: 2025-04-13
+
+    Özellikler:
+    - Daha Modüler Tasarım
+    - Kullanıcı Arayüzü (Aç/Kapa, UI Göster/Gizle, Hassasiyet, ESP Renk, FOV Ayarları)
+    - Taşınabilir UI
+    - ESP (Düşman Konum Göstergesi) - Renk Seçici Eklendi
+    - Gelişmiş Hedefleme (Görünürlük, En Yakın Hedef, FOV Kontrolü)
+    - Kilitlenme Sistemi (Lock-on) - 'L' tuşu ile kilit açma
+    - Yumuşatılmış Nişan Alma (Aim Smoothing)
+    - FOV Dairesi (Boyut ve Renk Ayarlı)
+    - Optimizasyon (Heartbeat Döngüsü)
+    - Hata Kontrolleri ve İyileştirmeler
+
+    !!! UYARI: BU TÜR SCRIPTLER ROBLOX KULLANIM KOŞULLARINA AYKIRIDIR !!!
+    !!! KULLANIMI HESABINIZIN YASAKLANMASINA NEDEN OLABİLİR !!!
+    !!! BU KOD SADECE EĞİTİM VE ANALİZ AMAÇLIDIR !!!
+]]
+
+-- Servisler
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local TweenService = game:GetService("TweenService") -- For potential future UI animations
+
+-- Lokal Oyuncu ve Kamera
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Ana Kontrol Tablosu
+local HyperAim = {
+    Settings = {
+        Sensitivity = 15,
+        MaxDistance = 1000,
+        TeamCheck = true,
+        LockOnClearKey = Enum.KeyCode.L, -- Kilitlenmeyi temizleme tuşu
+
+        ESP = {
+            Enabled = true,
+            Color = Color3.fromRGB(255, 0, 0),
+            Size = UDim2.new(0, 8, 0, 8)
+        },
+
+        FOV = {
+            Enabled = true,
+            Radius = 150, -- Piksel cinsinden FOV yarıçapı
+            Color = Color3.fromRGB(255, 255, 255),
+            Transparency = 0.5,
+            Thickness = 1,
+            NumSegments = 30 -- Dairenin pürüzsüzlüğü
+        }
+    },
+    State = {
+        Active = false,
+        UIVisible = true,
+        CurrentTarget = nil,
+        LockedTarget = nil, -- Kilitlenilen hedef (kafa kısmı)
+        IsDraggingUI = false,
+        DragStart = nil,
+        StartPos = nil
+    },
+    Modules = {},
+    Connections = {} -- To store event connections for later disconnection
+}
+
+--[[
+    Yardımcı Fonksiyonlar
+]]
+local function ValidateColorInput(text)
+    local num = tonumber(text)
+    if num and num >= 0 and num <= 255 then
+        return math.floor(num)
+    end
+    return nil
+end
+
+local function ValidateNumberInput(text, minVal, maxVal)
+     local num = tonumber(text)
+     if num and num >= minVal and num <= maxVal then
+         return num
+     end
+     return nil
+end
+
+
+--[[
+    UI Yöneticisi Modülü
+    - Arayüz elemanlarını oluşturur, yönetir ve etkileşimleri ele alır.
+    - Taşınabilirlik, Renk Seçici, FOV Ayarları eklendi.
+]]
+local UIManager = {}
+UIManager.__index = UIManager
+
+function UIManager.new()
+    local self = setmetatable({}, UIManager)
+    self.ScreenGui = nil
+    self.MainFrame = nil
+    self.TitleBar = nil -- For dragging
+    self.StatusLabel = nil
+    self.ToggleButton = nil
+    self.SensitivityBox = nil
+    self.EspRBox, self.EspGBox, self.EspBBox = nil, nil, nil -- ESP Color Inputs
+    self.FovRadiusSlider = nil -- FOV Radius Slider
+    self.FovRBox, self.FovGBox, self.FovBBox = nil, nil, nil -- FOV Color Inputs
+    self.FovCircle = nil -- The visual FOV circle GUI element
+    self.FovCircleSegments = {} -- Table to hold line segments for the circle
+
+    self:_CreateUI()
+    self:_CreateFOVCircle()
+    self:_ConnectEvents()
+    self:_UpdateFOVCircle() -- Initial draw
+    return self
+end
+
+function UIManager:_CreateUI()
+    -- Eski UI'yi temizle
+    local oldGui = PlayerGui:FindFirstChild("HyperAimUI")
+    if oldGui then oldGui:Destroy() end
+    local oldFovGui = PlayerGui:FindFirstChild("HyperAimFOVCircleUI")
+    if oldFovGui then oldFovGui:Destroy() end
+
+
+    self.ScreenGui = Instance.new("ScreenGui")
+    self.ScreenGui.Name = "HyperAimUI"
+    self.ScreenGui.ResetOnSpawn = false
+    self.ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    -- Main Frame
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 250, 0, 450) -- Increased height for new elements
+    MainFrame.Position = UDim2.new(0.05, 0, 0.5, 0)
+    MainFrame.BackgroundTransparency = 0.2
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25) -- Slightly bluish dark
+    MainFrame.BorderSizePixel = 1
+    MainFrame.BorderColor3 = Color3.fromRGB(60, 60, 70)
+    MainFrame.AnchorPoint = Vector2.new(0, 0.5)
+    MainFrame.Visible = HyperAim.State.UIVisible
+    MainFrame.ClipsDescendants = true -- Important for rounded corners
+    MainFrame.Parent = self.ScreenGui
+    self.MainFrame = MainFrame
+
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 10)
+    UICorner.Parent = MainFrame
+
+    -- Title Bar (for dragging and title text)
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Size = UDim2.new(1, 0, 0, 35)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    TitleBar.BorderSizePixel = 0
+    TitleBar.Parent = MainFrame
+    self.TitleBar = TitleBar -- Store reference for dragging logic
+
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, -40, 1, 0) -- Leave space for buttons if needed
+    Title.Position = UDim2.new(0, 10, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "HyperAim V3"
+    Title.TextColor3 = Color3.new(1, 1, 1)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.Parent = TitleBar
+
+    -- Close/Toggle Button (Example - can be adapted)
+    local ToggleUIBtn = Instance.new("TextButton")
+    ToggleUIBtn.Size = UDim2.new(0, 30, 0, 25)
+    ToggleUIBtn.Position = UDim2.new(1, -35, 0.5, -12.5)
+    ToggleUIBtn.AnchorPoint = Vector2.new(0, 0.5)
+    ToggleUIBtn.Text = "—" -- Minimize symbol
+    ToggleUIBtn.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+    ToggleUIBtn.Font = Enum.Font.GothamBold
+    ToggleUIBtn.TextSize = 18
+    ToggleUIBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    ToggleUIBtn.BorderSizePixel = 0
+    ToggleUIBtn.Parent = TitleBar
+    local btnCorner = Instance.new("UICorner"); btnCorner.CornerRadius = UDim.new(0, 5); btnCorner.Parent = ToggleUIBtn
+    self.ToggleUIBtn = ToggleUIBtn
+
+    -- Content Frame (holds the rest of the UI elements)
+    local ContentFrame = Instance.new("ScrollingFrame")
+    ContentFrame.Size = UDim2.new(1, 0, 1, -35) -- Fill below title bar
+    ContentFrame.Position = UDim2.new(0, 0, 0, 35)
+    ContentFrame.BackgroundTransparency = 1
+    ContentFrame.BorderSizePixel = 0
+    ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 500) -- Adjust canvas size as needed
+    ContentFrame.ScrollBarThickness = 6
+    ContentFrame.Parent = MainFrame
+
+    local UIListLayout = Instance.new("UIListLayout")
+    UIListLayout.Padding = UDim.new(0, 8)
+    UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    UIListLayout.Parent = ContentFrame
+
+    -- Helper function to create sections
+    local function createSection(title, layoutOrder)
+        local sectionLabel = Instance.new("TextLabel")
+        sectionLabel.Size = UDim2.new(0.9, 0, 0, 25)
+        sectionLabel.BackgroundTransparency = 1
+        sectionLabel.Text = title
+        sectionLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
+        sectionLabel.Font = Enum.Font.GothamSemibold
+        sectionLabel.TextSize = 16
+        sectionLabel.TextXAlignment = Enum.TextXAlignment.Left
+        sectionLabel.LayoutOrder = layoutOrder
+        sectionLabel.Parent = ContentFrame
+        return sectionLabel
+    end
+
+    -- General Section
+    createSection("Genel Kontroller", 1)
+    self.StatusLabel = Instance.new("TextLabel")
+    self.StatusLabel.Size = UDim2.new(0.9, 0, 0, 25)
+    self.StatusLabel.BackgroundTransparency = 1
+    self.StatusLabel.Text = "Durum: Kapalı"
+    self.StatusLabel.TextColor3 = Color3.new(1, 1, 1)
+    self.StatusLabel.Font = Enum.Font.Gotham
+    self.StatusLabel.TextSize = 14
+    self.StatusLabel.LayoutOrder = 2
+    self.StatusLabel.Parent = ContentFrame
+
+    self.ToggleButton = Instance.new("TextButton")
+    self.ToggleButton.Size = UDim2.new(0.9, 0, 0, 35)
+    self.ToggleButton.Text = "Aktif Et"
+    self.ToggleButton.TextColor3 = Color3.new(1, 1, 1)
+    self.ToggleButton.Font = Enum.Font.GothamSemibold
+    self.ToggleButton.TextSize = 15
+    self.ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+    self.ToggleButton.LayoutOrder = 3
+    self.ToggleButton.Parent = ContentFrame
+    local tbCorner = Instance.new("UICorner"); tbCorner.CornerRadius = UDim.new(0, 6); tbCorner.Parent = self.ToggleButton
+
+    self.SensitivityBox = Instance.new("TextBox")
+    self.SensitivityBox.Size = UDim2.new(0.9, 0, 0, 30)
+    self.SensitivityBox.PlaceholderText = "Hassasiyet (" .. HyperAim.Settings.Sensitivity .. ")"
+    self.SensitivityBox.Text = ""
+    self.SensitivityBox.TextColor3 = Color3.new(1, 1, 1)
+    self.SensitivityBox.Font = Enum.Font.Gotham
+    self.SensitivityBox.TextSize = 14
+    self.SensitivityBox.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    self.SensitivityBox.ClearTextOnFocus = false
+    self.SensitivityBox.LayoutOrder = 4
+    self.SensitivityBox.Parent = ContentFrame
+    local sbCorner = Instance.new("UICorner"); sbCorner.CornerRadius = UDim.new(0, 6); sbCorner.Parent = self.SensitivityBox
+
+
+    -- ESP Section
+    createSection("ESP Ayarları", 10)
+    local espColorFrame = Instance.new("Frame")
+    espColorFrame.Size = UDim2.new(0.9, 0, 0, 30)
+    espColorFrame.BackgroundTransparency = 1
+    espColorFrame.LayoutOrder = 11
+    espColorFrame.Parent = ContentFrame
+    local espColorLayout = Instance.new("UIListLayout")
+    espColorLayout.FillDirection = Enum.FillDirection.Horizontal
+    espColorLayout.Padding = UDim.new(0, 5)
+    espColorLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    espColorLayout.Parent = espColorFrame
+
+    local function createColorInput(parent, placeholder, initialValue)
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0.3, -5, 1, 0) -- Adjust size for 3 boxes
+        box.PlaceholderText = placeholder
+        box.Text = tostring(initialValue)
+        box.TextColor3 = Color3.new(1, 1, 1)
+        box.Font = Enum.Font.Gotham
+        box.TextSize = 13
+        box.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        box.ClearTextOnFocus = false
+        box.Parent = parent
+        local boxCorner = Instance.new("UICorner"); boxCorner.CornerRadius = UDim.new(0, 6); boxCorner.Parent = box
+        return box
+    end
+    local espC = HyperAim.Settings.ESP.Color
+    self.EspRBox = createColorInput(espColorFrame, "R", math.floor(espC.R * 255))
+    self.EspGBox = createColorInput(espColorFrame, "G", math.floor(espC.G * 255))
+    self.EspBBox = createColorInput(espColorFrame, "B", math.floor(espC.B * 255))
+
+    -- FOV Section
+    createSection("FOV Ayarları", 20)
+    local fovRadiusFrame = Instance.new("Frame")
+    fovRadiusFrame.Size = UDim2.new(0.9, 0, 0, 30)
+    fovRadiusFrame.BackgroundTransparency = 1
+    fovRadiusFrame.LayoutOrder = 21
+    fovRadiusFrame.Parent = ContentFrame
+    local fovRadiusLayout = Instance.new("UIListLayout")
+    fovRadiusLayout.FillDirection = Enum.FillDirection.Horizontal
+    fovRadiusLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    fovRadiusLayout.Parent = fovRadiusFrame
+
+    local fovLabel = Instance.new("TextLabel")
+    fovLabel.Size = UDim2.new(0.2, 0, 1, 0)
+    fovLabel.BackgroundTransparency = 1
+    fovLabel.Text = "Boyut:"
+    fovLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    fovLabel.Font = Enum.Font.Gotham
+    fovLabel.TextSize = 14
+    fovLabel.TextXAlignment = Enum.TextXAlignment.Left
+    fovLabel.Parent = fovRadiusFrame
+
+    self.FovRadiusSlider = Instance.new("TextBox") -- Using TextBox for direct input
+    self.FovRadiusSlider.Size = UDim2.new(0.8, -5, 1, 0)
+    self.FovRadiusSlider.PlaceholderText = "Yarıçap (px)"
+    self.FovRadiusSlider.Text = tostring(HyperAim.Settings.FOV.Radius)
+    self.FovRadiusSlider.TextColor3 = Color3.new(1, 1, 1)
+    self.FovRadiusSlider.Font = Enum.Font.Gotham
+    self.FovRadiusSlider.TextSize = 14
+    self.FovRadiusSlider.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    self.FovRadiusSlider.ClearTextOnFocus = false
+    self.FovRadiusSlider.Parent = fovRadiusFrame
+    local fovSCorner = Instance.new("UICorner"); fovSCorner.CornerRadius = UDim.new(0, 6); fovSCorner.Parent = self.FovRadiusSlider
+
+
+    local fovColorFrame = Instance.new("Frame")
+    fovColorFrame.Size = UDim2.new(0.9, 0, 0, 30)
+    fovColorFrame.BackgroundTransparency = 1
+    fovColorFrame.LayoutOrder = 22
+    fovColorFrame.Parent = ContentFrame
+    local fovColorLayout = Instance.new("UIListLayout")
+    fovColorLayout.FillDirection = Enum.FillDirection.Horizontal
+    fovColorLayout.Padding = UDim.new(0, 5)
+    fovColorLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    fovColorLayout.Parent = fovColorFrame
+
+    local fovC = HyperAim.Settings.FOV.Color
+    self.FovRBox = createColorInput(fovColorFrame, "R", math.floor(fovC.R * 255))
+    self.FovGBox = createColorInput(fovColorFrame, "G", math.floor(fovC.G * 255))
+    self.FovBBox = createColorInput(fovColorFrame, "B", math.floor(fovC.B * 255))
+
+    -- Warning Label
+    local WarningLabel = Instance.new("TextLabel")
+    WarningLabel.Size = UDim2.new(0.9, 0, 0, 20)
+    WarningLabel.BackgroundTransparency = 1
+    WarningLabel.Text = "Uyarı: Kullanım risklidir ve yasaklanmaya yol açabilir."
+    WarningLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    WarningLabel.Font = Enum.Font.Gotham
+    WarningLabel.TextSize = 11
+    WarningLabel.TextWrapped = true
+    WarningLabel.LayoutOrder = 100 -- Place at the end
+    WarningLabel.Parent = ContentFrame
+
+
+    -- Parent the ScreenGui last
+    self.ScreenGui.Parent = PlayerGui
+end
+
+function UIManager:_CreateFOVCircle()
+     -- Separate ScreenGui for FOV Circle to avoid clipping issues with main frame
+     local fovGui = Instance.new("ScreenGui")
+     fovGui.Name = "HyperAimFOVCircleUI"
+     fovGui.ResetOnSpawn = false
+     fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+     fovGui.DisplayOrder = -1 -- Draw behind main UI but above game world
+     fovGui.Parent = PlayerGui
+
+     self.FovCircle = Instance.new("Frame")
+     self.FovCircle.Name = "FOVCircleOutline"
+     self.FovCircle.BackgroundTransparency = 1 -- Make frame transparent
+     self.FovCircle.BorderSizePixel = 0
+     self.FovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+     self.FovCircle.Position = UDim2.new(0.5, 0, 0.5, 0) -- Center screen
+     self.FovCircle.Visible = HyperAim.Settings.FOV.Enabled and HyperAim.State.Active
+     self.FovCircle.Parent = fovGui
+
+     -- Create segments (lines) for the circle outline
+     for i = 1, HyperAim.Settings.FOV.NumSegments do
+         local segment = Instance.new("Frame")
+         segment.Name = "Segment" .. i
+         segment.BorderSizePixel = 0
+         segment.AnchorPoint = Vector2.new(0.5, 0.5)
+         segment.BackgroundColor3 = HyperAim.Settings.FOV.Color
+         segment.BackgroundTransparency = HyperAim.Settings.FOV.Transparency
+         segment.Parent = self.FovCircle
+         table.insert(self.FovCircleSegments, segment)
+     end
+end
+
+-- Updates the visual appearance and position of the FOV circle
+function UIManager:_UpdateFOVCircle()
+    if not self.FovCircle then return end
+
+    local radius = HyperAim.Settings.FOV.Radius
+    local numSegments = HyperAim.Settings.FOV.NumSegments
+    local thickness = HyperAim.Settings.FOV.Thickness
+    local color = HyperAim.Settings.FOV.Color
+    local transparency = HyperAim.Settings.FOV.Transparency
+
+    self.FovCircle.Visible = HyperAim.Settings.FOV.Enabled and HyperAim.State.Active
+
+    if not self.FovCircle.Visible then return end
+
+    self.FovCircle.Size = UDim2.new(0, radius * 2, 0, radius * 2) -- Update container size
+
+    local angleIncrement = (2 * math.pi) / numSegments
+
+    for i, segment in ipairs(self.FovCircleSegments) do
+        local angle1 = (i - 1) * angleIncrement
+        local angle2 = i * angleIncrement
+
+        -- Calculate start and end points relative to the center
+        local x1 = radius * math.cos(angle1)
+        local y1 = radius * math.sin(angle1)
+        local x2 = radius * math.cos(angle2)
+        local y2 = radius * math.sin(angle2)
+
+        -- Calculate position and size of the line segment
+        local midX = (x1 + x2) / 2
+        local midY = (y1 + y2) / 2
+        local segmentLength = math.sqrt((x2 - x1)^2 + (y2 - y1)^2)
+        local rotation = math.atan2(y2 - y1, x2 - x1)
+
+        segment.Size = UDim2.new(0, segmentLength, 0, thickness)
+        segment.Position = UDim2.new(0.5, midX, 0.5, midY)
+        segment.Rotation = math.deg(rotation)
+        segment.BackgroundColor3 = color
+        segment.BackgroundTransparency = transparency
+    end
+end
+
+
+function UIManager:_ConnectEvents()
+    local connections = {}
+
+    -- Toggle Button
+    connections.toggle = self.ToggleButton.MouseButton1Click:Connect(function()
+        HyperAim:ToggleActive()
+    end)
+
+    -- Toggle UI Button
+    connections.toggleUI = self.ToggleUIBtn.MouseButton1Click:Connect(function()
+        HyperAim:ToggleUIVisibility()
+    end)
+
+    -- Sensitivity Input
+    connections.sens = self.SensitivityBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            local value = ValidateNumberInput(self.SensitivityBox.Text, 1, 100)
+            if value then
+                HyperAim:SetSensitivity(value)
+                self.SensitivityBox.PlaceholderText = "Hassasiyet (" .. value .. ")"
+                self.SensitivityBox.Text = ""
+            else
+                self.SensitivityBox.Text = "Geçersiz!"
+                task.wait(1)
+                self.SensitivityBox.Text = ""
+            end
+        end
+    end)
+
+    -- ESP Color Inputs
+    local function updateEspColor()
+        local r = ValidateColorInput(self.EspRBox.Text)
+        local g = ValidateColorInput(self.EspGBox.Text)
+        local b = ValidateColorInput(self.EspBBox.Text)
+        if r and g and b then
+            HyperAim:SetESPColor(Color3.fromRGB(r, g, b))
+        else
+            -- Indicate error briefly? Maybe just reset to current if invalid.
+            local curCol = HyperAim.Settings.ESP.Color
+            self.EspRBox.Text = tostring(math.floor(curCol.R * 255))
+            self.EspGBox.Text = tostring(math.floor(curCol.G * 255))
+            self.EspBBox.Text = tostring(math.floor(curCol.B * 255))
+        end
+    end
+    connections.espR = self.EspRBox.FocusLost:Connect(updateEspColor)
+    connections.espG = self.EspGBox.FocusLost:Connect(updateEspColor)
+    connections.espB = self.EspBBox.FocusLost:Connect(updateEspColor)
+
+
+    -- FOV Radius Input
+    connections.fovRadius = self.FovRadiusSlider.FocusLost:Connect(function(enterPressed)
+         if enterPressed then
+             local value = ValidateNumberInput(self.FovRadiusSlider.Text, 10, 1000) -- Min 10px, Max 1000px FOV
+             if value then
+                 HyperAim:SetFOVRadius(value)
+                 self:_UpdateFOVCircle()
+             else
+                 self.FovRadiusSlider.Text = tostring(HyperAim.Settings.FOV.Radius) -- Reset to current
+             end
+         end
+    end)
+
+    -- FOV Color Inputs
+    local function updateFovColor()
+        local r = ValidateColorInput(self.FovRBox.Text)
+        local g = ValidateColorInput(self.FovGBox.Text)
+        local b = ValidateColorInput(self.FovBBox.Text)
+        if r and g and b then
+            HyperAim:SetFOVColor(Color3.fromRGB(r, g, b))
+            self:_UpdateFOVCircle()
+        else
+            local curCol = HyperAim.Settings.FOV.Color
+            self.FovRBox.Text = tostring(math.floor(curCol.R * 255))
+            self.FovGBox.Text = tostring(math.floor(curCol.G * 255))
+            self.FovBBox.Text = tostring(math.floor(curCol.B * 255))
+        end
+    end
+    connections.fovR = self.FovRBox.FocusLost:Connect(updateFovColor)
+    connections.fovG = self.FovGBox.FocusLost:Connect(updateFovColor)
+    connections.fovB = self.FovBBox.FocusLost:Connect(updateFovColor)
+
+
+    -- UI Dragging Logic
+    connections.dragBegin = self.TitleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            HyperAim.State.IsDraggingUI = true
+            HyperAim.State.DragStart = input.Position
+            HyperAim.State.StartPos = self.MainFrame.Position
+            -- Prevent text selection during drag
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    HyperAim.State.IsDraggingUI = false
+                end
+            end)
+        end
+    end)
+
+    connections.dragMove = UserInputService.InputChanged:Connect(function(input)
+        if HyperAim.State.IsDraggingUI and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - HyperAim.State.DragStart
+            self.MainFrame.Position = UDim2.new(
+                HyperAim.State.StartPos.X.Scale,
+                HyperAim.State.StartPos.X.Offset + delta.X,
+                HyperAim.State.StartPos.Y.Scale,
+                HyperAim.State.StartPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    connections.dragEnd = UserInputService.InputEnded:Connect(function(input)
+         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+             HyperAim.State.IsDraggingUI = false
+         end
+    end)
+
+
+    -- Store connections for cleanup
+    HyperAim.Connections.UIManager = connections
+end
+
+function UIManager:UpdateStatus(active)
+    self.StatusLabel.Text = "Durum: " .. (active and "Açık" or "Kapalı")
+    self.ToggleButton.Text = active and "Devre Dışı Bırak" or "Aktif Et"
+    self.ToggleButton.BackgroundColor3 = active and Color3.fromRGB(80, 40, 40) or Color3.fromRGB(40, 80, 40)
+    self.FovCircle.Visible = HyperAim.Settings.FOV.Enabled and active -- Update FOV visibility on toggle
+end
+
+function UIManager:SetVisible(visible)
+    self.MainFrame.Visible = visible
+end
+
+function UIManager:UpdateESPColorUI(color)
+    self.EspRBox.Text = tostring(math.floor(color.R * 255))
+    self.EspGBox.Text = tostring(math.floor(color.G * 255))
+    self.EspBBox.Text = tostring(math.floor(color.B * 255))
+end
+
+function UIManager:UpdateFOVRadiusUI(radius)
+     self.FovRadiusSlider.Text = tostring(radius)
+end
+
+function UIManager:UpdateFOVColorUI(color)
+    self.FovRBox.Text = tostring(math.floor(color.R * 255))
+    self.FovGBox.Text = tostring(math.floor(color.G * 255))
+    self.FovBBox.Text = tostring(math.floor(color.B * 255))
+end
+
+function UIManager:Destroy()
+    -- Disconnect events
+    if HyperAim.Connections.UIManager then
+        for _, conn in pairs(HyperAim.Connections.UIManager) do
+            if conn and typeof(conn) == "RBXScriptConnection" then
+                conn:Disconnect()
+            end
+        end
+        HyperAim.Connections.UIManager = nil
+    end
+
+    -- Destroy GUIs
+    if self.ScreenGui then self.ScreenGui:Destroy() end
+    local fovGui = PlayerGui:FindFirstChild("HyperAimFOVCircleUI")
+    if fovGui then fovGui:Destroy() end
+
+    -- Clear references
+    for k, _ in pairs(self) do self[k] = nil end
+end
+
+HyperAim.Modules.UIManager = UIManager
+
+--[[
+    ESP Yöneticisi Modülü
+    - Renk güncelleme fonksiyonu eklendi.
+]]
+local ESPManager = {}
+ESPManager.__index = ESPManager
+ESPManager.ESPTag = "HyperAimESP"
+
+function ESPManager.new()
+    local self = setmetatable({}, ESPManager)
+    self.ActiveESPs = {}
+    self:_Initialize()
+    return self
+end
+
+function ESPManager:_Initialize()
+    local connections = {}
+    -- Connect to player events
+    connections.playerAdded = Players.PlayerAdded:Connect(function(player)
+        connections["charAdded_"..player.UserId] = player.CharacterAdded:Connect(function(character)
+            task.wait(0.5) -- Wait for potential team setup etc.
+            if HyperAim.Modules.TargetingSystem:IsPotentialTarget(player) then
+                self:CreateESPForCharacter(character)
+            end
+        end)
+    end)
+
+    connections.playerRemoving = Players.PlayerRemoving:Connect(function(player)
+        self:RemoveESP(player)
+        -- Disconnect the CharacterAdded connection for this player
+        local connKey = "charAdded_"..player.UserId
+        if connections[connKey] then
+            connections[connKey]:Disconnect()
+            connections[connKey] = nil
+        end
+    end)
+
+    -- Initial scan
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+             -- Connect CharacterAdded for existing players too
+             connections["charAdded_"..player.UserId] = player.CharacterAdded:Connect(function(character)
+                 task.wait(0.5)
+                 if HyperAim.Modules.TargetingSystem:IsPotentialTarget(player) then
+                     self:CreateESPForCharacter(character)
+                 end
+             end)
+             -- Create ESP if character already exists
+             if player.Character and HyperAim.Modules.TargetingSystem:IsPotentialTarget(player) then
+                 self:CreateESPForCharacter(player.Character)
+             end
+        end
+    end
+
+    HyperAim.Connections.ESPManager = connections
+end
+
+function ESPManager:CreateESPForCharacter(character)
+    local player = Players:GetPlayerFromCharacter(character)
+    if not player or self.ActiveESPs[player] then return end
+
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+
+    local oldEsp = head:FindFirstChild(self.ESPTag)
+    if oldEsp then oldEsp:Destroy() end
+
+    local gui = Instance.new("BillboardGui")
+    gui.Name = self.ESPTag
+    gui.Adornee = head
+    gui.Size = HyperAim.Settings.ESP.Size
+    gui.AlwaysOnTop = true
+    gui.Enabled = HyperAim.Settings.ESP.Enabled and HyperAim.State.Active -- Initial visibility
+    gui.Parent = head
+
+    local dot = Instance.new("Frame")
+    dot.Name = "Dot"
+    dot.Size = UDim2.new(1, 0, 1, 0)
+    dot.BackgroundColor3 = HyperAim.Settings.ESP.Color
+    dot.BorderSizePixel = 0
+    dot.Parent = gui
+
+    self.ActiveESPs[player] = gui
+
+    -- Handle character removal
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+         local diedConnKey = "died_"..player.UserId
+         HyperAim.Connections.ESPManager[diedConnKey] = humanoid.Died:Connect(function()
+             self:RemoveESP(player)
+             if HyperAim.Connections.ESPManager[diedConnKey] then
+                 HyperAim.Connections.ESPManager[diedConnKey]:Disconnect()
+                 HyperAim.Connections.ESPManager[diedConnKey] = nil
+             end
+         end)
+    end
+    -- Also handle if character is destroyed directly
+    local destroyingConnKey = "destroying_"..character:GetFullName() -- Use unique name
+    HyperAim.Connections.ESPManager[destroyingConnKey] = character.Destroying:Connect(function()
+         self:RemoveESP(player)
+         if HyperAim.Connections.ESPManager[destroyingConnKey] then
+              HyperAim.Connections.ESPManager[destroyingConnKey]:Disconnect()
+              HyperAim.Connections.ESPManager[destroyingConnKey] = nil
+         end
+    end)
+end
+
+function ESPManager:RemoveESP(player)
+    if self.ActiveESPs[player] then
+        self.ActiveESPs[player]:Destroy()
+        self.ActiveESPs[player] = nil
+    end
+     -- Also clear lock if the removed player was the locked target
+     if HyperAim.State.LockedTarget and player and player.Character and HyperAim.State.LockedTarget.Parent == player.Character then
+          HyperAim:ClearLock()
+          print("Locked target removed, clearing lock.")
+     end
+end
+
+function ESPManager:SetESPVisibility(visible)
+     HyperAim.Settings.ESP.Enabled = visible -- Update setting
+     for player, gui in pairs(self.ActiveESPs) do
+        if gui and gui.Parent then
+             gui.Enabled = visible and HyperAim.State.Active -- Only show if system is active too
+        else
+            self.ActiveESPs[player] = nil -- Clean up orphaned
+        end
+     end
+end
+
+function ESPManager:UpdateESPColor(color)
+    HyperAim.Settings.ESP.Color = color -- Update setting
+    for player, gui in pairs(self.ActiveESPs) do
+        if gui and gui.Parent then
+            local dot = gui:FindFirstChild("Dot")
+            if dot then
+                dot.BackgroundColor3 = color
+            end
+        else
+             self.ActiveESPs[player] = nil -- Clean up orphaned
+        end
+    end
+end
+
+function ESPManager:Destroy()
+    -- Disconnect events
+    if HyperAim.Connections.ESPManager then
+        for key, conn in pairs(HyperAim.Connections.ESPManager) do
+            if conn and typeof(conn) == "RBXScriptConnection" then
+                conn:Disconnect()
+            end
+        end
+        HyperAim.Connections.ESPManager = nil
+    end
+
+    -- Remove ESPs
+    for player, gui in pairs(self.ActiveESPs) do
+        if gui then gui:Destroy() end
+    end
+    self.ActiveESPs = {}
+end
+
+HyperAim.Modules.ESPManager = ESPManager
+
+--[[
+    Hedefleme Sistemi Modülü
+    - FOV kontrolü ve Kilitlenme mantığı eklendi.
+]]
+local TargetingSystem = {}
+TargetingSystem.__index = TargetingSystem
+
+function TargetingSystem.new()
+    local self = setmetatable({}, TargetingSystem)
+    self.RaycastParams = RaycastParams.new()
+    self.RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    self.RaycastParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera} -- Base list
+    self.RaycastParams.IgnoreWater = true
+    return self
+end
+
+-- Check if a player is a valid potential target based on current state/settings
+function TargetingSystem:IsPotentialTarget(player)
+    if not player or player == LocalPlayer or not player.Character then return false end
+    if HyperAim.Settings.TeamCheck then
+        if not LocalPlayer.Team or not player.Team or player.Team == LocalPlayer.Team then return false end
+    end
+    local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    return true
+end
+
+-- Check if a world part is visible from the camera
+function TargetingSystem:IsVisible(targetPart)
+    if not targetPart or not targetPart:IsA("BasePart") then return false end
+
+    local origin = Camera.CFrame.Position
+    local targetPos = targetPart.Position
+    local direction = (targetPos - origin)
+    local distance = direction.Magnitude
+
+    if distance == 0 or distance > HyperAim.Settings.MaxDistance then return false end -- Added zero check
+
+    -- Update ignore list dynamically (include player's own character and ESPs)
+    local ignoreList = {LocalPlayer.Character, Camera}
+    if PlayerGui then
+        local espGui = PlayerGui:FindFirstChild("HyperAimESP") -- Assuming one main ESP container if structure changes
+        if espGui then table.insert(ignoreList, espGui) end
+        local fovGui = PlayerGui:FindFirstChild("HyperAimFOVCircleUI")
+        if fovGui then table.insert(ignoreList, fovGui) end
+    end
+    -- Ignore the target's own character model to prevent self-occlusion issues with raycast
+    if targetPart.Parent and targetPart.Parent:IsA("Model") then
+         -- table.insert(ignoreList, targetPart.Parent) -- Careful: might allow seeing through walls close to target
+    end
+    self.RaycastParams.FilterDescendantsInstances = ignoreList
+
+    local result = workspace:Raycast(origin, direction.Unit * distance, self.RaycastParams)
+
+    if not result then return true end -- Nothing hit
+
+    -- If hit, check if it's part of the target's character model or something behind it
+    if result.Instance:IsDescendantOf(targetPart.Parent) then
+         -- Hit something on the target's character, consider visible
+         return true
+    else
+         -- Hit something else (a wall, another player, etc.)
+         -- Optional: Add a small tolerance? Check if hit point is very close to targetPos?
+         -- print("Ray hit:", result.Instance:GetFullName(), "instead of target")
+         return false
+    end
+end
+
+-- Check if a screen point is within the defined FOV circle
+function TargetingSystem:IsInFOV(screenPoint)
+    if not HyperAim.Settings.FOV.Enabled then return true end -- FOV check disabled
+
+    local viewportSize = Camera.ViewportSize
+    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    local distance = (screenPoint - screenCenter).Magnitude
+
+    return distance <= HyperAim.Settings.FOV.Radius
+end
+
+
+-- Finds the best target based on lock status, visibility, FOV, and proximity
+function TargetingSystem:FindBestTarget()
+    local bestTargetHead = nil
+    local shortestDistance = math.huge
+    local viewportSize = Camera.ViewportSize
+    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+
+    -- 1. Check Locked Target First
+    if HyperAim.State.LockedTarget then
+        local lockedChar = HyperAim.State.LockedTarget.Parent
+        local player = Players:GetPlayerFromCharacter(lockedChar)
+        if self:IsPotentialTarget(player) and self:IsVisible(HyperAim.State.LockedTarget) then
+             -- Check if still on screen and within FOV
+             local screenPoint, onScreen = Camera:WorldToViewportPoint(HyperAim.State.LockedTarget.Position)
+             if onScreen and self:IsInFOV(Vector2.new(screenPoint.X, screenPoint.Y)) then
+                 -- Locked target is still valid
+                 return HyperAim.State.LockedTarget
+             else
+                 -- Locked target is no longer valid (off-screen, outside FOV, obstructed)
+                 HyperAim:ClearLock() -- Automatically clear lock
+                 print("Locked target no longer valid, clearing lock.")
+             end
+        else
+            -- Locked target is no longer valid (died, left team, etc.)
+            HyperAim:ClearLock()
+            print("Locked target no longer valid, clearing lock.")
+        end
+    end
+
+    -- 2. If no valid lock, find the closest valid target within FOV
+    for _, player in ipairs(Players:GetPlayers()) do
+        if self:IsPotentialTarget(player) then
+            local character = player.Character
+            local head = character:FindFirstChild("Head")
+
+            if head then
+                local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local screenVec = Vector2.new(screenPoint.X, screenPoint.Y)
+                    if self:IsInFOV(screenVec) then
+                        -- Check visibility last as it's most expensive
+                        if self:IsVisible(head) then
+                            local dist = (screenVec - screenCenter).Magnitude
+                            if dist < shortestDistance then
+                                shortestDistance = dist
+                                bestTargetHead = head
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- If a new best target is found, automatically lock onto it
+    if bestTargetHead then
+         HyperAim:SetLock(bestTargetHead)
+    end
+
+
+    return bestTargetHead
+end
+
+HyperAim.Modules.TargetingSystem = TargetingSystem
+
+--[[
+    Nişan Alma Yardımı Modülü
+    - Aims at the CurrentTarget provided by the main loop.
+]]
+local AimAssist = {}
+AimAssist.__index = AimAssist
+
+function AimAssist.new()
+    local self = setmetatable({}, AimAssist)
+    return self
+end
+
+function AimAssist:UpdateAim()
+    -- Target is now determined in the main loop (FindBestTarget)
+    local target = HyperAim.State.CurrentTarget
+
+    if target and target.Parent then -- Ensure target and its parent exist
+        local targetPos = target.Position
+        local currentCFrame = Camera.CFrame
+
+        -- Avoid aiming if target is too close (prevents erratic spinning)
+        if (targetPos - currentCFrame.Position).Magnitude < 1.5 then return end
+
+        local lookAtCFrame = CFrame.lookAt(currentCFrame.Position, targetPos)
+
+        -- Smoothing using CFrame:Lerp
+        local alpha = 1 / HyperAim.Settings.Sensitivity
+        alpha = math.clamp(alpha, 0.01, 1.0)
+
+        -- Lerp only the rotation part
+        local newRotation = currentCFrame.Rotation:Lerp(lookAtCFrame.Rotation, alpha)
+        local newCFrame = CFrame.new(currentCFrame.Position) * newRotation
+
+        -- Apply the smoothed CFrame
+        Camera.CFrame = newCFrame
+    end
+end
+
+HyperAim.Modules.AimAssist = AimAssist
+
+
+--[[
+    Ana Kontrol Fonksiyonları ve Döngü
+]]
+function HyperAim:ToggleActive()
+    self.State.Active = not self.State.Active
+    self.Modules.UIManager:UpdateStatus(self.State.Active)
+    self.Modules.ESPManager:SetESPVisibility(self.State.Active) -- Toggle ESP visibility
+
+    if not self.State.Active then
+        self.State.CurrentTarget = nil -- Clear target when deactivated
+        self.State.LockedTarget = nil -- Clear lock when deactivated
+        self.Modules.UIManager:_UpdateFOVCircle() -- Hide FOV circle
+    else
+         self.Modules.UIManager:_UpdateFOVCircle() -- Show FOV circle if enabled
+    end
+    print("HyperAim " .. (self.State.Active and "Aktif" or "Devre Dışı"))
+end
+
+function HyperAim:ToggleUIVisibility()
+    self.State.UIVisible = not self.State.UIVisible
+    self.Modules.UIManager:SetVisible(self.State.UIVisible)
+    print("HyperAim UI " .. (self.State.UIVisible and "Gösteriliyor" or "Gizlendi"))
+end
+
+function HyperAim:SetSensitivity(value)
+    self.Settings.Sensitivity = value
+    print("HyperAim Hassasiyeti: " .. value)
+end
+
+function HyperAim:SetESPColor(color)
+    self.Modules.ESPManager:UpdateESPColor(color)
+    self.Modules.UIManager:UpdateESPColorUI(color) -- Update UI text boxes
+    print("HyperAim ESP Rengi: ", color)
+end
+
+function HyperAim:SetFOVRadius(radius)
+    self.Settings.FOV.Radius = radius
+    self.Modules.UIManager:UpdateFOVRadiusUI(radius) -- Update UI
+    print("HyperAim FOV Yarıçapı: " .. radius)
+end
+
+function HyperAim:SetFOVColor(color)
+    self.Settings.FOV.Color = color
+    self.Modules.UIManager:UpdateFOVColorUI(color) -- Update UI
+    print("HyperAim FOV Rengi: ", color)
+end
+
+function HyperAim:SetLock(targetHead)
+     if targetHead ~= self.State.LockedTarget then
+          self.State.LockedTarget = targetHead
+          -- Optional: Add visual indicator for lock? (e.g., change ESP color)
+          print("Locked onto target:", targetHead.Parent.Name)
+     end
+end
+
+function HyperAim:ClearLock()
+     if self.State.LockedTarget then
+          self.State.LockedTarget = nil
+          print("Lock cleared.")
+          -- Optional: Reset visual indicator if any
+     end
+end
+
+
+function HyperAim:Initialize()
+    print("HyperAim V3 Başlatılıyor...")
+    -- Initialize modules
+    self.Modules.TargetingSystem = TargetingSystem.new()
+    self.Modules.UIManager = UIManager.new() -- UI needs TargetingSystem potentially
+    self.Modules.ESPManager = ESPManager.new() -- ESP needs TargetingSystem
+    self.Modules.AimAssist = AimAssist.new()
+
+    -- Initial UI state update
+    self.Modules.UIManager:UpdateStatus(self.State.Active)
+    self.Modules.UIManager:SetVisible(self.State.UIVisible)
+    self.Modules.UIManager:UpdateESPColorUI(self.Settings.ESP.Color)
+    self.Modules.UIManager:UpdateFOVRadiusUI(self.Settings.FOV.Radius)
+    self.Modules.UIManager:UpdateFOVColorUI(self.Settings.FOV.Color)
+    self.Modules.ESPManager:SetESPVisibility(self.Settings.ESP.Enabled)
+
+    -- Connect Lock Clear Key
+    local lockClearConn = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+        if gameProcessedEvent then return end -- Ignore if typing in chat etc.
+        if input.KeyCode == HyperAim.Settings.LockOnClearKey then
+            self:ClearLock()
+        end
+    end)
+    table.insert(self.Connections, lockClearConn) -- Store connection for cleanup
+
+    -- Connect the main loop using Heartbeat for potential optimization
+    -- Heartbeat runs after physics simulation, RenderStepped runs before rendering.
+    -- For camera manipulation, RenderStepped often feels smoother, but Heartbeat
+    -- might be better if physics calculations are involved or for general performance.
+    local heartbeatConn = RunService.Heartbeat:Connect(function(deltaTime)
+        if not self.State.Active then
+             -- Ensure target is cleared if inactive, even if loop runs briefly
+             if self.State.CurrentTarget then self.State.CurrentTarget = nil end
+             return
+        end
+
+        -- Wrap core logic in pcall for safety
+        local success, err = pcall(function()
+            -- 1. Find the best target (handles lock logic internally)
+            self.State.CurrentTarget = self.Modules.TargetingSystem:FindBestTarget()
+
+            -- 2. Update Aim Assist if there's a target
+            if self.State.CurrentTarget then
+                self.Modules.AimAssist:UpdateAim()
+            end
+
+            -- 3. Update FOV Circle visuals (only if active and enabled)
+            if self.Settings.FOV.Enabled then
+                 self.Modules.UIManager:_UpdateFOVCircle()
+            end
+        end)
+        if not success then
+            warn("HyperAim Heartbeat Hatası: ", err)
+        end
+    end)
+    table.insert(self.Connections, heartbeatConn) -- Store connection for cleanup
+
+    print("HyperAim V3 Başlatıldı.")
+end
+
+function HyperAim:Destroy()
+    print("HyperAim V3 Durduruluyor...")
+    -- Disconnect general connections
+    for _, conn in ipairs(self.Connections) do
+        if conn and typeof(conn) == "RBXScriptConnection" then
+            conn:Disconnect()
+        end
+    end
+    self.Connections = {}
+
+    -- Clean up modules (they handle their own internal connections)
+    if self.Modules.UIManager then self.Modules.UIManager:Destroy() end
+    if self.Modules.ESPManager then self.Modules.ESPManager:Destroy() end
+    -- Other modules might not need explicit destroy if they just hold functions/data
+
+    -- Clear main table references
+    for k, _ in pairs(HyperAim) do
+        if k ~= "Settings" and k ~= "State" and k ~= "Modules" and k~= "Connections" then -- Avoid clearing core tables themselves
+             HyperAim[k] = nil
+        end
+    end
+    print("HyperAim V3 Durduruldu.")
+end
+
+-- Script Execution Start
+HyperAim:Initialize()
+
+-- Auto-cleanup when script is removed/disabled
+script.Destroying:Connect(function()
+    HyperAim:Destroy()
+end)
