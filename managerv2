@@ -1,32 +1,47 @@
 --[[
-    HyperAim Sistemi V0.4.5_CodeDecrease
+    HyperAim Sistemi V0.5 (Kapsamlı Geliştirme)
     Yazar: [Your Name/Alias Here - İsteğe Bağlı]
     Tarih: 2025-04-15
 
-    Sürüm Notları (v0.4.5):
-    - Kod Sadeleştirme: Gereksiz karmaşıklık azaltıldı, mantık akışları basitleştirildi.
-    - Performans Optimizasyonu: Heartbeat döngüsü ve sık yapılan hesaplamalar optimize edildi.
-    - Fonksiyonellik İyileştirmeleri: Mevcut özelliklerin verimliliği artırıldı.
-        - Prediction özelliği sadeleştirme amacıyla kaldırıldı.
-    - UI Kalitesi: Kullanıcı arayüzü korunmuş ve işlevselliği sağlanmıştır.
-    - Hata Düzeltme: Önceki sürümlerden kalan hatalar giderildi.
-    - Bypass Özelliği EKLENMEMİŞTİR (Roblox ToS ve Güvenlik Politikaları).
+    Sürüm Notları (v0.5):
+    - Kapsamlı Hata Düzeltme: Nil kontrolleri, event yönetimi, API kullanımı güçlendirildi.
+    - UI İyileştirmeleri: Düzen ve animasyonlar iyileştirildi, sağlamlık artırıldı.
+    - Hedefleme İyileştirmeleri: Raycast, FOV ve kilitlenme mantığı gözden geçirildi.
+    - Nişan Alma İyileştirmeleri:
+        - Dinamik yumuşatma optimize edildi.
+        - Basit Hız Tahminlemesi (Prediction) isteğe bağlı olarak geri eklendi.
+    - ESP İyileştirmeleri: Can güncellemeleri HealthChanged olayı ile optimize edildi.
+    - Bunnyhop İyileştirmeleri: Durum kontrolleri eklendi.
+    - Performans Optimizasyonu: Heartbeat döngüsü ve genel verimlilik artırıldı.
+    - Kod Kalitesi: Yorumlar ve okunabilirlik geliştirildi.
+    - Bypass Özelliği EKLENMEMİŞTİR.
 
     !!! UYARI: BU TÜR SCRIPTLER ROBLOX KULLANIM KOŞULLARINA AYKIRIDIR !!!
     !!! KULLANIMI HESABINIZIN YASAKLANMASINA NEDEN OLABİLİR !!!
     !!! BU KOD SADECE EĞİTİM VE ANALİZ AMAÇLIDIR !!!
 ]]
 
--- Servisler (pcall ile güvenli alma)
+-- Servisler (pcall ile güvenli alma ve kontrol)
 local Players, RunService, UserInputService, GuiService, TweenService, HttpService
-local IsHttpServiceAvailable = pcall(function() HttpService = game:GetService("HttpService") end)
-local SuccessPlayers = pcall(function() Players = game:GetService("Players") end)
-local SuccessRunService = pcall(function() RunService = game:GetService("RunService") end)
-local SuccessUserInputService = pcall(function() UserInputService = game:GetService("UserInputService") end)
-local SuccessGuiService = pcall(function() GuiService = game:GetService("GuiService") end)
-local SuccessTweenService = pcall(function() TweenService = game:GetService("TweenService") end)
+local servicesAvailable = true
+local function getService(name)
+    local success, service = pcall(game.GetService, game, name)
+    if not success or not service then
+        warn("HyperAim: Servis yüklenemedi -", name)
+        servicesAvailable = false
+    end
+    return service
+end
 
-if not (SuccessPlayers and SuccessRunService and SuccessUserInputService and SuccessGuiService and SuccessTweenService) then warn("HyperAim: Gerekli servisler yüklenemedi!"); return end
+Players = getService("Players")
+RunService = getService("RunService")
+UserInputService = getService("UserInputService")
+GuiService = getService("GuiService")
+TweenService = getService("TweenService")
+local IsHttpServiceAvailable = pcall(function() HttpService = getService("HttpService") end)
+if not IsHttpServiceAvailable then HttpService = nil end -- Ensure HttpService is nil if unavailable
+
+if not servicesAvailable then return end -- Stop if essential services failed
 
 -- Lokal Oyuncu ve Kamera (Güvenli alma)
 local LocalPlayer = Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
@@ -36,133 +51,131 @@ if not Camera then warn("HyperAim: Kamera bulunamadı!"); return end
 local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
 if not PlayerGui then warn("HyperAim: PlayerGui bulunamadı!"); return end
 
+
 -- Ana Kontrol Tablosu
 local HyperAim = {
     Settings = { -- Default Settings
         Sensitivity = 15, DynamicSmoothingFactor = 5, MinSmoothingAlpha = 0.05, MaxSmoothingAlpha = 0.5, AimDeadzone = 0.1,
         MaxDistance = 1000, TeamCheck = true, LockOnClearKey = Enum.KeyCode.L, TargetPart = "Head", DistancePriority = "Closest",
-        -- Prediction kaldırıldı: Prediction = { Enabled = false, Factor = 0.05 },
+        Prediction = { Enabled = false, Factor = 0.05 }, -- Prediction geri eklendi
         ESP = { Enabled = true, DotEnabled = true, HealthBarEnabled = true, Color = {R=255, G=0, B=0}, Size = {X=8, Y=8}, HealthBarColor = {R=0, G=255, B=0}, HealthBarBackgroundColor = {R=80, G=80, B=80}, HealthBarSize = {Width=50, Height=5} },
         FOV = { Enabled = true, Radius = 150, Color = {R=255, G=255, B=255}, Transparency = 0.5, Thickness = 1, NumSegments = 30 },
         Bunnyhop = { Enabled = false, Key = Enum.KeyCode.Space },
-        UI = { Position = {XScale=0.05, XOffset=0, YScale=0.5, YOffset=0} }
+        UI = { Position = {XS=0.05, XO=0, YS=0.5, YO=0} } -- Kısaltılmış anahtarlar kullanıldı
     },
     State = { Active = false, UIVisible = true, CurrentTarget = nil, LockedTarget = nil, IsDraggingUI = false, DragStart = nil, StartPos = nil, IsBunnyhopping = false },
     Modules = {},
-    Connections = {}
+    Connections = {} -- Top-level + module connection tables
 }
 
 --[[
-    Yardımcı Fonksiyonlar (Sadeleştirilmiş)
+    Yardımcı Fonksiyonlar (Robust & Optimized)
 ]]
-local function Color3ToTable(c3) return {R=math.floor(c3.R*255+.5), G=math.floor(c3.G*255+.5), B=math.floor(c3.B*255+.5)} end -- Added rounding
-local function TableToColor3(t) return Color3.fromRGB(t.R or 255, t.G or 0, t.B or 0) end
-local function UDim2ToTable(u2) return {XS=u2.X.Scale, XO=u2.X.Offset, YS=u2.Y.Scale, YO=u2.Y.Offset} end -- Shorter keys
-local function TableToUDim2(t) return UDim2.new(t.XS or 0, t.XO or 0, t.YS or 0, t.YO or 0) end
+local function Color3ToTable(c3) if typeof(c3)~="Color3" then return{R=255,G=0,B=0}end; return{R=math.floor(c3.R*255+.5),G=math.floor(c3.G*255+.5),B=math.floor(c3.B*255+.5)}end
+local function TableToColor3(t) if type(t)~="table" then return Color3.fromRGB(255,0,0)end; return Color3.fromRGB(t.R or 255,t.G or 0,t.B or 0)end
+local function UDim2ToTable(u2) if typeof(u2)~="UDim2" then return{XS=0,XO=0,YS=0,YO=0}end; return{XS=u2.X.Scale,XO=u2.X.Offset,YS=u2.Y.Scale,YO=u2.Y.Offset}end
+local function TableToUDim2(t) if type(t)~="table" then return UDim2.new()end; return UDim2.new(t.XS or 0,t.XO or 0,t.YS or 0,t.YO or 0)end
 
 local function ValidateNum(t,min,max) local n=tonumber(t); if n and n>=min and n<=max then return n end end
 local function ValidateColorVal(t) local n=tonumber(t); if n and n>=0 and n<=255 then return math.floor(n+.5) end end
 
+-- GetTargetPart (Optimized slightly)
 local function GetTargetPart(char, partName)
     if not char or not char.Parent then return nil end
-    local part = char:FindFirstChild(partName, true)
-    if part and part:IsA("BasePart") then return part end
-    local fallback = (partName == "Head") and "HumanoidRootPart" or "Head"
-    part = char:FindFirstChild(fallback)
-    if part and part:IsA("BasePart") then return part end
-    return nil
+    local primaryPart = char:FindFirstChild(partName, true)
+    if primaryPart and primaryPart:IsA("BasePart") then return primaryPart end
+    local fallbackName = (partName == "Head") and "HumanoidRootPart" or "Head"
+    local fallbackPart = char:FindFirstChild(fallbackName)
+    if fallbackPart and fallbackPart:IsA("BasePart") then return fallbackPart end
+    return nil -- Explicitly return nil if nothing found
 end
 
-local function SafeDisconnect(conn) if conn and conn.Connected then conn:Disconnect() end end
+-- Connection Management (Robust)
+local function SafeDisconnect(conn) if conn and typeof(conn)=="RBXScriptConnection" and conn.Connected then pcall(conn.Disconnect, conn) end end
 local function DisconnectTable(tbl) if type(tbl)~="table" then return end; for k,v in pairs(tbl) do SafeDisconnect(v); tbl[k]=nil end end
 
 --[[
-    Settings Manager Modülü (Minimal)
+    Settings Manager Modülü (Robust)
 ]]
-local SettingsManager = {}
-SettingsManager.SettingsKey = "HyperAim_Settings_v4.5" -- Updated key
+local SettingsManager = {}; SettingsManager.SettingsKey = "HyperAim_Settings_v5" -- Updated key
 
 local function MergeSettings(default, loaded)
     local merged = {}
     if type(default)~="table" then return loaded or default end
     for k, v in pairs(default) do
-        if type(v)=="table" then local lv=(loaded and type(loaded[k])=="table") and loaded[k] or nil; merged[k]=MergeSettings(v, lv)
-        elseif loaded and loaded[k]~=nil and type(loaded[k])==type(v) then merged[k]=loaded[k]
-        else merged[k]=v end
+        local loadedVal = loaded and loaded[k]
+        if type(v)=="table" and type(loadedVal)=="table" then merged[k]=MergeSettings(v, loadedVal)
+        elseif loadedVal~=nil and type(loadedVal)==type(v) then merged[k]=loadedVal -- Use loaded if type matches
+        else merged[k]=v end -- Otherwise use default
     end
     return merged
 end
 
 function SettingsManager:_LoadSettings()
-    print("Ayarlar yükleniyor (v4.5)...")
-    local data = nil; local success = false; local saved = nil -- Replace 'nil' with readfile() etc. if possible
-    if saved and IsHttpServiceAvailable then success, data = pcall(HttpService.JSONDecode, HttpService, saved); if not success then warn("Ayarlar çözümlenemedi:", data); data=nil end end
+    print("Ayarlar yükleniyor (v5)...")
+    local data, success, saved = nil, false, nil -- readfile() replacement
+    if saved and HttpService then success, data = pcall(HttpService.JSONDecode, HttpService, saved); if not success then warn("Ayarlar çözümlenemedi:", data); data=nil end end
     HyperAim.Settings = MergeSettings(HyperAim.Settings, data)
     print("Ayarlar yüklendi/birleştirildi.")
     task.defer(function() if HyperAim.Modules.UIManager and HyperAim.Modules.UIManager.MainFrame then HyperAim.Modules.UIManager.MainFrame.Position = TableToUDim2(HyperAim.Settings.UI.Position) end end)
 end
 
 function SettingsManager:_SaveSettings()
-    if not IsHttpServiceAvailable then warn("HttpService yok, ayarlar kaydedilemiyor."); return end
+    if not HttpService then warn("HttpService yok, kaydedilemiyor."); return end
     if HyperAim.Modules.UIManager and HyperAim.Modules.UIManager.MainFrame and HyperAim.Modules.UIManager.MainFrame.Parent then HyperAim.Settings.UI.Position = UDim2ToTable(HyperAim.Modules.UIManager.MainFrame.Position) end
     local success, json = pcall(HttpService.JSONEncode, HttpService, HyperAim.Settings)
-    if success then print("Ayarlar kaydedildi (Simülasyon):", json) -- writefile()
+    if success then print("Ayarlar kaydedildi (Sim):", json) -- writefile()
     else warn("Ayarlar kaydedilemedi (JSON Encode):", json) end
 end
 
 HyperAim.Modules.SettingsManager = SettingsManager
 
 --[[
-    UI Yöneticisi Modülü (Korunmuş, Hata Kontrollü)
-    - UI oluşturma ve event bağlantıları daha güvenli hale getirildi.
-    - Gereksiz UI referansları kaldırıldı, doğrudan erişim kullanıldı (dikkatli).
+    UI Yöneticisi Modülü (İyileştirilmiş ve Sağlam)
 ]]
-local UIManager = {}
-UIManager.__index = UIManager
+local UIManager = {}; UIManager.__index = UIManager
 local TWEEN_INFO_FAST = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TWEEN_INFO_NORMAL = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 function UIManager.new()
-    local self = setmetatable({}, UIManager)
-    self.Connections = {}
-    self.FovCircleSegments = {}
-    local success, err = pcall(function() self:_CreateUI(); self:_CreateFOVCircle() end)
-    if not success then warn("UI Oluşturma Hatası:", err); return nil end
-    self:_ConnectEvents()
-    self:_ApplyLoadedSettingsToUI()
+    local self = setmetatable({}, UIManager); self.Connections={}; self.FovCircleSegments={}
+    local ok, err = pcall(function() self:_CreateUI(); self:_CreateFOVCircle() end)
+    if not ok then warn("UI Oluşturma Hatası:", err); return nil end
+    self:_ConnectEvents(); self:_ApplyLoadedSettingsToUI()
     return self
 end
 
--- UI Oluşturma (Fonksiyonlar iç içe, daha kısa ama okunabilirliği azaltabilir)
+-- UI Oluşturma (v4.1'e benzer, daha sağlam referanslar)
 function UIManager:_CreateUI()
     pcall(function() (PlayerGui:FindFirstChild("HyperAimUI")):Destroy() end)
-    local sg = Instance.new("ScreenGui"); sg.Name="HyperAimUI"; sg.ResetOnSpawn=false; sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; self.ScreenGui=sg
-    local mf = Instance.new("Frame"); mf.Name="MainFrame"; mf.Size=UDim2.new(0,280,0,520); mf.Position=TableToUDim2(HyperAim.Settings.UI.Position); mf.BackgroundTransparency=0.1; mf.BackgroundColor3=Color3.fromRGB(25,28,35); mf.BorderSizePixel=0; mf.AnchorPoint=Vector2.new(0,0.5); mf.Visible=HyperAim.State.UIVisible; mf.ClipsDescendants=true; mf.Parent=sg; self.MainFrame=mf
-    local mfC = Instance.new("UICorner"); mfC.CornerRadius=UDim.new(0,8); mfC.Parent=mf
-    local tb = Instance.new("Frame"); tb.Name="TitleBar"; tb.Size=UDim2.new(1,0,0,35); tb.BackgroundColor3=Color3.fromRGB(45,50,60); tb.BorderSizePixel=0; tb.Parent=mf; self.TitleBar=tb
-    local tl = Instance.new("TextLabel"); tl.Name="TitleLabel"; tl.Size=UDim2.new(1,-40,1,0); tl.Position=UDim2.new(0,10,0,0); tl.BackgroundTransparency=1; tl.Text="HyperAim v0.4.5"; tl.TextColor3=Color3.new(.9,.9,.9); tl.Font=Enum.Font.GothamBold; tl.TextSize=18; tl.TextXAlignment=Enum.TextXAlignment.Left; tl.Parent=tb
-    local tglb = Instance.new("TextButton"); tglb.Name="ToggleUIBtn"; tglb.Size=UDim2.new(0,30,0,25); tglb.Position=UDim2.new(1,-35,0.5,-12.5); tglb.AnchorPoint=Vector2.new(1,0.5); tglb.Text=HyperAim.State.UIVisible and"—"or"+"; tglb.TextColor3=Color3.new(.8,.8,.8); tglb.Font=Enum.Font.GothamBold; tglb.TextSize=18; tglb.BackgroundColor3=Color3.fromRGB(60,65,75); tglb.BorderSizePixel=0; tglb.Parent=tb; local tglbC=Instance.new("UICorner"); tglbC.CornerRadius=UDim.new(0,5); tglbC.Parent=tglb; self.ToggleUIBtn=tglb -- Direct reference stored
-    local cf = Instance.new("ScrollingFrame"); cf.Name="ContentFrame"; cf.Size=UDim2.new(1,0,1,-35); cf.Position=UDim2.new(0,0,0,35); cf.BackgroundTransparency=1; cf.BorderSizePixel=0; cf.CanvasSize=UDim2.new(0,0,0,700); cf.ScrollBarThickness=6; cf.ScrollBarImageColor3=Color3.fromRGB(60,65,75); cf.Parent=mf; self.ContentFrame=cf
-    local cfl = Instance.new("UIListLayout"); cfl.Padding=UDim.new(0,10); cfl.SortOrder=Enum.SortOrder.LayoutOrder; cfl.HorizontalAlignment=Enum.HorizontalAlignment.Center; cfl.Parent=cf
-    local cfp = Instance.new("UIPadding"); cfp.PaddingTop=UDim.new(0,10); cfp.PaddingBottom=UDim.new(0,10); cfp.PaddingLeft=UDim.new(0,10); cfp.PaddingRight=UDim.new(0,10); cfp.Parent=cf
+    local sg=Instance.new("ScreenGui");sg.Name="HyperAimUI";sg.ResetOnSpawn=false;sg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;self.ScreenGui=sg
+    local mf=Instance.new("Frame");mf.Name="MainFrame";mf.Size=UDim2.new(0,280,0,550);mf.Position=TableToUDim2(HyperAim.Settings.UI.Position);mf.BackgroundTransparency=0.1;mf.BackgroundColor3=Color3.fromRGB(25,28,35);mf.BorderSizePixel=0;mf.AnchorPoint=Vector2.new(0,0.5);mf.Visible=HyperAim.State.UIVisible;mf.ClipsDescendants=true;mf.Parent=sg;self.MainFrame=mf
+    local mfC=Instance.new("UICorner");mfC.CornerRadius=UDim.new(0,8);mfC.Parent=mf
+    local tb=Instance.new("Frame");tb.Name="TitleBar";tb.Size=UDim2.new(1,0,0,35);tb.BackgroundColor3=Color3.fromRGB(45,50,60);tb.BorderSizePixel=0;tb.Parent=mf;self.TitleBar=tb
+    local tl=Instance.new("TextLabel");tl.Name="TitleLabel";tl.Size=UDim2.new(1,-40,1,0);tl.Position=UDim2.new(0,10,0,0);tl.BackgroundTransparency=1;tl.Text="HyperAim v0.5";tl.TextColor3=Color3.new(.9,.9,.9);tl.Font=Enum.Font.GothamBold;tl.TextSize=18;tl.TextXAlignment=Enum.TextXAlignment.Left;tl.Parent=tb
+    local tglb=Instance.new("TextButton");tglb.Name="ToggleUIBtn";tglb.Size=UDim2.new(0,30,0,25);tglb.Position=UDim2.new(1,-35,0.5,-12.5);tglb.AnchorPoint=Vector2.new(1,0.5);tglb.Text=HyperAim.State.UIVisible and"—"or"+";tglb.TextColor3=Color3.new(.8,.8,.8);tglb.Font=Enum.Font.GothamBold;tglb.TextSize=18;tglb.BackgroundColor3=Color3.fromRGB(60,65,75);tglb.BorderSizePixel=0;tglb.Parent=tb;local tglbC=Instance.new("UICorner");tglbC.CornerRadius=UDim.new(0,5);tglbC.Parent=tglb;self.ToggleUIBtn=tglb
+    local cf=Instance.new("ScrollingFrame");cf.Name="ContentFrame";cf.Size=UDim2.new(1,0,1,-35);cf.Position=UDim2.new(0,0,0,35);cf.BackgroundTransparency=1;cf.BorderSizePixel=0;cf.CanvasSize=UDim2.new(0,0,0,750);cf.ScrollBarThickness=6;cf.ScrollBarImageColor3=Color3.fromRGB(60,65,75);cf.Parent=mf;self.ContentFrame=cf
+    local cfl=Instance.new("UIListLayout");cfl.Padding=UDim.new(0,10);cfl.SortOrder=Enum.SortOrder.LayoutOrder;cfl.HorizontalAlignment=Enum.HorizontalAlignment.Center;cfl.Parent=cf
+    local cfp=Instance.new("UIPadding");cfp.PaddingTop=UDim.new(0,10);cfp.PaddingBottom=UDim.new(0,10);cfp.PaddingLeft=UDim.new(0,10);cfp.PaddingRight=UDim.new(0,10);cfp.Parent=cf
 
-    -- UI Element Creation Helpers (Simplified)
-    local function Section(t,o) local l=Instance.new("TextLabel");l.Name=t.."S";l.Size=UDim2.new(1,-10,0,25);l.BackgroundTransparency=1;l.Text=t;l.TextColor3=Color3.fromRGB(190,195,205);l.Font=Enum.Font.GothamSemibold;l.TextSize=16;l.TextXAlignment=Enum.TextXAlignment.Left;l.LayoutOrder=o;l.Parent=cf;return l end
-    local function Toggle(txt,key,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.7,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local b=Instance.new("TextButton");b.Name=key.."B";b.Size=UDim2.new(0.3,-5,1,0);b.Position=UDim2.new(0.7,5,0,0);b.Text=st[sk]and"Açık"or"Kapalı";b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.GothamSemibold;b.TextSize=13;b.BackgroundColor3=st[sk]and Color3.fromRGB(70,110,90)or Color3.fromRGB(110,70,70);b.Parent=f; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b; self.Connections[key]=b.MouseButton1Click:Connect(function()st[sk]=not st[sk];b.Text=st[sk]and"Açık"or"Kapalı";b.BackgroundColor3=st[sk]and Color3.fromRGB(70,110,90)or Color3.fromRGB(110,70,70);if cb then pcall(cb,st[sk])end end); return b end
-    local function Input(txt,key,plh,val,o,vf,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.4,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local b=Instance.new("TextBox");b.Name=key.."I";b.Size=UDim2.new(0.6,-5,1,0);b.Position=UDim2.new(0.4,5,0,0);b.PlaceholderText=plh;b.Text=tostring(val);b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.Gotham;b.TextSize=14;b.BackgroundColor3=Color3.fromRGB(40,45,55);b.ClearTextOnFocus=false;b.Parent=f; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b; self.Connections[key]=b.FocusLost:Connect(function(ep)if ep then local v=vf(b.Text);if v then pcall(cb,v);b.Text=tostring(v)else b.Text=""end end end); return b end
-    local function OptGroup(txt,key,opts,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.3,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local bf=Instance.new("Frame");bf.Name=key.."BF";bf.Size=UDim2.new(0.7,-5,1,0);bf.Position=UDim2.new(0.3,5,0,0);bf.BackgroundTransparency=1;bf.Parent=f; local bl=Instance.new("UIListLayout");bl.FillDirection=Enum.FillDirection.Horizontal;bl.Padding=UDim.new(0,5);bl.VerticalAlignment=Enum.VerticalAlignment.Center;bl.Parent=bf; local btns={}; for _,opt in ipairs(opts) do local b=Instance.new("TextButton");b.Name=key..opt.Value.."B";b.Size=UDim2.new(0,60,1,0);b.Text=opt.Text;b.TextColor3=Color3.new(.9,.9,.9);b.Font=Enum.Font.Gotham;b.TextSize=13;b.BackgroundColor3=(st[sk]==opt.Value)and Color3.fromRGB(70,100,130)or Color3.fromRGB(50,55,65);b.Parent=bf; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,4);c.Parent=b;btns[opt.Value]=b; self.Connections[key..opt.Value]=b.MouseButton1Click:Connect(function()if st[sk]~=opt.Value then st[sk]=opt.Value;for v,btn in pairs(btns)do if btn and btn.Parent then btn.BackgroundColor3=(v==opt.Value)and Color3.fromRGB(70,100,130)or Color3.fromRGB(50,55,65)end end;if cb then pcall(cb,opt.Value)end end end) end; return btns end
-    local function ColorInputs(txt,key,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.3,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local inf=Instance.new("Frame");inf.Name=key.."IF";inf.Size=UDim2.new(0.7,-5,1,0);inf.Position=UDim2.new(0.3,5,0,0);inf.BackgroundTransparency=1;inf.Parent=f; local inl=Instance.new("UIListLayout");inl.FillDirection=Enum.FillDirection.Horizontal;inl.Padding=UDim.new(0,5);inl.VerticalAlignment=Enum.VerticalAlignment.Center;inl.Parent=inf; local ct=st[sk]; local ins={}; local function update() local r=ValidateColorVal(ins.R.Text);local g=ValidateColorVal(ins.G.Text);local b=ValidateColorVal(ins.B.Text); if r and g and b then local nct={R=r,G=g,B=b};st[sk]=nct;if cb then pcall(cb,TableToColor3(nct))end else local cur=st[sk];ins.R.Text=tostring(cur.R);ins.G.Text=tostring(cur.G);ins.B.Text=tostring(cur.B)end end; for _,ck in ipairs({"R","G","B"}) do local b=Instance.new("TextBox");b.Name=key..ck.."I";b.Size=UDim2.new(0.3,-5,1,0);b.PlaceholderText=ck;b.Text=tostring(ct[ck]);b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.Gotham;b.TextSize=13;b.BackgroundColor3=Color3.fromRGB(40,45,55);b.ClearTextOnFocus=false;b.Parent=inf; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b;ins[ck]=b;self.Connections[key..ck]=b.FocusLost:Connect(update) end; return ins end
+    -- Helper Functions (Referansları saklamak için tablo kullan)
+    self.Elements = {} -- Store references here
+    local function Section(t,o) local l=Instance.new("TextLabel");l.Name=t.."S";l.Size=UDim2.new(1,-10,0,25);l.BackgroundTransparency=1;l.Text=t;l.TextColor3=Color3.fromRGB(190,195,205);l.Font=Enum.Font.GothamSemibold;l.TextSize=16;l.TextXAlignment=Enum.TextXAlignment.Left;l.LayoutOrder=o;l.Parent=cf; return l end
+    local function Toggle(txt,key,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.7,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local b=Instance.new("TextButton");b.Name=key.."B";b.Size=UDim2.new(0.3,-5,1,0);b.Position=UDim2.new(0.7,5,0,0);b.Text=st[sk]and"Açık"or"Kapalı";b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.GothamSemibold;b.TextSize=13;b.BackgroundColor3=st[sk]and Color3.fromRGB(70,110,90)or Color3.fromRGB(110,70,70);b.Parent=f; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b; self.Elements[key.."Button"]=b; self.Connections[key]=b.MouseButton1Click:Connect(function()st[sk]=not st[sk];b.Text=st[sk]and"Açık"or"Kapalı";b.BackgroundColor3=st[sk]and Color3.fromRGB(70,110,90)or Color3.fromRGB(110,70,70);if cb then pcall(cb,st[sk])end end); return b end
+    local function Input(txt,key,plh,val,o,vf,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.4,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local b=Instance.new("TextBox");b.Name=key.."I";b.Size=UDim2.new(0.6,-5,1,0);b.Position=UDim2.new(0.4,5,0,0);b.PlaceholderText=plh;b.Text=tostring(val);b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.Gotham;b.TextSize=14;b.BackgroundColor3=Color3.fromRGB(40,45,55);b.ClearTextOnFocus=false;b.Parent=f; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b; self.Elements[key.."InputBox"]=b; self.Connections[key]=b.FocusLost:Connect(function(ep)if ep then local v=vf(b.Text);if v then pcall(cb,v);b.Text=tostring(v)else local curVal=HyperAim.Settings;for _,k in ipairs(key:split("_"))do curVal=curVal and curVal[k]end; b.Text=tostring(curVal or "")end end end); return b end -- Reset to current setting on invalid
+    local function OptGroup(txt,key,opts,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.3,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local bf=Instance.new("Frame");bf.Name=key.."BF";bf.Size=UDim2.new(0.7,-5,1,0);bf.Position=UDim2.new(0.3,5,0,0);bf.BackgroundTransparency=1;bf.Parent=f; local bl=Instance.new("UIListLayout");bl.FillDirection=Enum.FillDirection.Horizontal;bl.Padding=UDim.new(0,5);bl.VerticalAlignment=Enum.VerticalAlignment.Center;bl.Parent=bf; local btns={}; self.Elements[key.."OptionButtons"]=btns; for _,opt in ipairs(opts) do local b=Instance.new("TextButton");b.Name=key..opt.Value.."B";b.Size=UDim2.new(0,60,1,0);b.Text=opt.Text;b.TextColor3=Color3.new(.9,.9,.9);b.Font=Enum.Font.Gotham;b.TextSize=13;b.BackgroundColor3=(st[sk]==opt.Value)and Color3.fromRGB(70,100,130)or Color3.fromRGB(50,55,65);b.Parent=bf; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,4);c.Parent=b;btns[opt.Value]=b; self.Connections[key..opt.Value]=b.MouseButton1Click:Connect(function()if st[sk]~=opt.Value then st[sk]=opt.Value;for v,btn in pairs(btns)do if btn and btn.Parent then btn.BackgroundColor3=(v==opt.Value)and Color3.fromRGB(70,100,130)or Color3.fromRGB(50,55,65)end end;if cb then pcall(cb,opt.Value)end end end) end; return btns end
+    local function ColorInputs(txt,key,st,sk,o,cb) local f=Instance.new("Frame");f.Name=key.."F";f.Size=UDim2.new(1,-10,0,30);f.BackgroundTransparency=1;f.LayoutOrder=o;f.Parent=cf; local l=Instance.new("TextLabel");l.Name=key.."L";l.Size=UDim2.new(0.3,-5,1,0);l.BackgroundTransparency=1;l.Text=txt;l.TextColor3=Color3.new(.9,.9,.9);l.Font=Enum.Font.Gotham;l.TextSize=14;l.TextXAlignment=Enum.TextXAlignment.Left;l.Parent=f; local inf=Instance.new("Frame");inf.Name=key.."IF";inf.Size=UDim2.new(0.7,-5,1,0);inf.Position=UDim2.new(0.3,5,0,0);inf.BackgroundTransparency=1;inf.Parent=f; local inl=Instance.new("UIListLayout");inl.FillDirection=Enum.FillDirection.Horizontal;inl.Padding=UDim.new(0,5);inl.VerticalAlignment=Enum.VerticalAlignment.Center;inl.Parent=inf; local ct=st[sk]; local ins={}; self.Elements[key.."ColorInputs"]=ins; local function update() local r,g,b=ValidateColorVal(ins.R.Text),ValidateColorVal(ins.G.Text),ValidateColorVal(ins.B.Text); if r and g and b then local nct={R=r,G=g,B=b};st[sk]=nct;if cb then pcall(cb,TableToColor3(nct))end else local cur=st[sk];ins.R.Text=tostring(cur.R);ins.G.Text=tostring(cur.G);ins.B.Text=tostring(cur.B)end end; for _,ck in ipairs({"R","G","B"}) do local b=Instance.new("TextBox");b.Name=key..ck.."I";b.Size=UDim2.new(0.3,-5,1,0);b.PlaceholderText=ck;b.Text=tostring(ct[ck]);b.TextColor3=Color3.new(1,1,1);b.Font=Enum.Font.Gotham;b.TextSize=13;b.BackgroundColor3=Color3.fromRGB(40,45,55);b.ClearTextOnFocus=false;b.Parent=inf; local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,5);c.Parent=b;ins[ck]=b;self.Connections[key..ck]=b.FocusLost:Connect(update) end; return ins end
 
     -- === Create Elements ===
     Section("Genel", 1)
-    self.StatusLabel=Instance.new("TextLabel"); self.StatusLabel.Name="StatusLabel"; self.StatusLabel.Size=UDim2.new(1,-10,0,25); self.StatusLabel.BackgroundTransparency=1; self.StatusLabel.Text="Durum: Kapalı"; self.StatusLabel.TextColor3=Color3.new(1,1,1); self.StatusLabel.Font=Enum.Font.Gotham; self.StatusLabel.TextSize=14; self.StatusLabel.LayoutOrder=2; self.StatusLabel.Parent=cf
-    self.MasterToggleButton=Instance.new("TextButton"); self.MasterToggleButton.Name="MasterToggleButton"; self.MasterToggleButton.Size=UDim2.new(1,-10,0,35); self.MasterToggleButton.Text="Aktif Et"; self.MasterToggleButton.TextColor3=Color3.new(1,1,1); self.MasterToggleButton.Font=Enum.Font.GothamSemibold; self.MasterToggleButton.TextSize=15; self.MasterToggleButton.BackgroundColor3=Color3.fromRGB(40,80,40); self.MasterToggleButton.LayoutOrder=3; self.MasterToggleButton.Parent=cf; local mtbC=Instance.new("UICorner"); mtbC.CornerRadius=UDim.new(0,6); mtbC.Parent=self.MasterToggleButton
+    self.Elements.StatusLabel=Instance.new("TextLabel"); self.Elements.StatusLabel.Name="StatusLabel"; self.Elements.StatusLabel.Size=UDim2.new(1,-10,0,25); self.Elements.StatusLabel.BackgroundTransparency=1; self.Elements.StatusLabel.Text="Durum: Kapalı"; self.Elements.StatusLabel.TextColor3=Color3.new(1,1,1); self.Elements.StatusLabel.Font=Enum.Font.Gotham; self.Elements.StatusLabel.TextSize=14; self.Elements.StatusLabel.LayoutOrder=2; self.Elements.StatusLabel.Parent=cf
+    self.Elements.MasterToggleButton=Instance.new("TextButton"); self.Elements.MasterToggleButton.Name="MasterToggleButton"; self.Elements.MasterToggleButton.Size=UDim2.new(1,-10,0,35); self.Elements.MasterToggleButton.Text="Aktif Et"; self.Elements.MasterToggleButton.TextColor3=Color3.new(1,1,1); self.Elements.MasterToggleButton.Font=Enum.Font.GothamSemibold; self.Elements.MasterToggleButton.TextSize=15; self.Elements.MasterToggleButton.BackgroundColor3=Color3.fromRGB(40,80,40); self.Elements.MasterToggleButton.LayoutOrder=3; self.Elements.MasterToggleButton.Parent=cf; local mtbC=Instance.new("UICorner"); mtbC.CornerRadius=UDim.new(0,6); mtbC.Parent=self.Elements.MasterToggleButton
     Toggle("Takım Kontrolü", "TeamCheck", HyperAim.Settings, "TeamCheck", 4)
     Section("Nişan Alma", 10)
     Input("Hassasiyet:", "Sensitivity", "1-100", HyperAim.Settings.Sensitivity, 11, function(t)return ValidateNum(t,1,100)end, function(v)HyperAim:SetSensitivity(v)end)
     OptGroup("Hedef Parça:", "TargetPart", {{Text="Kafa",Value="Head"},{Text="Gövde",Value="HumanoidRootPart"}}, HyperAim.Settings, "TargetPart", 12, function(v)HyperAim:SetTargetPart(v)end)
     OptGroup("Mesafe Önceliği:", "DistancePriority", {{Text="Yakın",Value="Closest"},{Text="Uzak",Value="Farthest"}}, HyperAim.Settings, "DistancePriority", 13, function(v)HyperAim:SetDistancePriority(v)end)
-    -- Prediction kaldırıldı: Toggle("Tahminleme", "PredictionEnabled", HyperAim.Settings.Prediction, "Enabled", 14)
+    Toggle("Tahminleme", "PredictionEnabled", HyperAim.Settings.Prediction, "Enabled", 14) -- Prediction Toggle
     Section("ESP", 20)
     Toggle("ESP Aktif", "EspEnabled", HyperAim.Settings.ESP, "Enabled", 21, function(v)if HyperAim.Modules.ESPManager then HyperAim.Modules.ESPManager:SetESPVisibility(v)end end)
     Toggle("Nokta Göster", "EspDotEnabled", HyperAim.Settings.ESP, "DotEnabled", 22, function()if HyperAim.Modules.ESPManager then HyperAim.Modules.ESPManager:UpdateESPElementVisibility()end end)
@@ -175,27 +188,27 @@ function UIManager:_CreateUI()
     ColorInputs("FOV Rengi:", "FovColor", HyperAim.Settings.FOV, "Color", 33, function(c3)HyperAim:SetFOVColor(c3);self:_UpdateFOVCircle()end)
     Section("Diğer", 40)
     Toggle("Bunnyhop", "BunnyhopEnabled", HyperAim.Settings.Bunnyhop, "Enabled", 41)
-    local saveBtn=Instance.new("TextButton"); saveBtn.Name="SaveButton"; saveBtn.Size=UDim2.new(1,-10,0,35); saveBtn.Text="Ayarları Kaydet (Simülasyon)"; saveBtn.TextColor3=Color3.new(1,1,1); saveBtn.Font=Enum.Font.GothamSemibold; saveBtn.TextSize=14; saveBtn.BackgroundColor3=Color3.fromRGB(60,90,120); saveBtn.LayoutOrder=100; saveBtn.Parent=cf; local sbC=Instance.new("UICorner"); sbC.CornerRadius=UDim.new(0,6); sbC.Parent=saveBtn; self.SaveButton=saveBtn
-    local WarnL=Instance.new("TextLabel"); WarnL.Name="WarningLabel"; WarnL.Size=UDim2.new(1,-10,0,30); WarnL.BackgroundTransparency=1; WarnL.Text="Uyarı: Kullanım risklidir."; WarnL.TextColor3=Color3.fromRGB(255,100,100); WarnL.Font=Enum.Font.Gotham; WarnL.TextSize=11; WarnL.TextWrapped=true; WarnL.LayoutOrder=101; WarnL.Parent=cf
+    local saveBtn=Instance.new("TextButton");saveBtn.Name="SaveButton";saveBtn.Size=UDim2.new(1,-10,0,35);saveBtn.Text="Ayarları Kaydet (Simülasyon)";saveBtn.TextColor3=Color3.new(1,1,1);saveBtn.Font=Enum.Font.GothamSemibold;saveBtn.TextSize=14;saveBtn.BackgroundColor3=Color3.fromRGB(60,90,120);saveBtn.LayoutOrder=100;saveBtn.Parent=cf;local sbC=Instance.new("UICorner");sbC.CornerRadius=UDim.new(0,6);sbC.Parent=saveBtn;self.SaveButton=saveBtn
+    local WarnL=Instance.new("TextLabel");WarnL.Name="WarningLabel";WarnL.Size=UDim2.new(1,-10,0,30);WarnL.BackgroundTransparency=1;WarnL.Text="Uyarı: Kullanım risklidir.";WarnL.TextColor3=Color3.fromRGB(255,100,100);WarnL.Font=Enum.Font.Gotham;WarnL.TextSize=11;WarnL.TextWrapped=true;WarnL.LayoutOrder=101;WarnL.Parent=cf
 
     sg.Parent = PlayerGui
 end
 
--- Ayarları UI'a uygulama (Sadeleştirilmiş, ana elementler)
+-- Apply loaded settings (Simplified example)
 function UIManager:_ApplyLoadedSettingsToUI()
-    if self.StatusLabel then self:UpdateStatus(HyperAim.State.Active) end
-    -- Diğer elementlerin güncellenmesi _CreateUI içindeki helper'lar tarafından yapılıyor.
-    -- Ancak event bağlantıları sonrası tekrar çağırmak gerekebilir veya
-    -- helper fonksiyonları UI elementlerini döndürüp burada saklayıp güncellemek gerekir.
-    -- Şimdilik varsayılan değerlerle oluşturulup eventlerle güncelleniyor.
+    -- This needs to find elements by name/key and update properties
+    -- Example:
+    local sensBox = self.ContentFrame:FindFirstChild("SensitivityF", true) and self.ContentFrame:FindFirstChild("SensitivityF", true):FindFirstChild("SensitivityI")
+    if sensBox then sensBox.Text = tostring(HyperAim.Settings.Sensitivity) end
+    -- ... repeat for all other elements ...
+    self:UpdateStatus(HyperAim.State.Active)
 end
 
 function UIManager:_CreateFOVCircle()
-    pcall(function() (PlayerGui:FindFirstChild("HyperAimFOVCircleUI")):Destroy() end)
-    local fovGui = Instance.new("ScreenGui"); fovGui.Name="HyperAimFOVCircleUI"; fovGui.ResetOnSpawn=false; fovGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; fovGui.DisplayOrder=-1; fovGui.Parent=PlayerGui
-    self.FovCircle = Instance.new("Frame"); self.FovCircle.Name="FOVCircleOutline"; self.FovCircle.BackgroundTransparency=1; self.FovCircle.BorderSizePixel=0; self.FovCircle.AnchorPoint=Vector2.new(.5,.5); self.FovCircle.Position=UDim2.new(.5,0,.5,0); self.FovCircle.Visible=HyperAim.Settings.FOV.Enabled and HyperAim.State.Active; self.FovCircle.Parent=fovGui
-    self.FovCircleSegments={}
-    for i=1,HyperAim.Settings.FOV.NumSegments do local s=Instance.new("Frame"); s.Name="S"..i; s.BorderSizePixel=0; s.AnchorPoint=Vector2.new(.5,.5); s.BackgroundColor3=TableToColor3(HyperAim.Settings.FOV.Color); s.BackgroundTransparency=HyperAim.Settings.FOV.Transparency; s.Parent=self.FovCircle; table.insert(self.FovCircleSegments,s) end
+    pcall(function()(PlayerGui:FindFirstChild("HyperAimFOVCircleUI")):Destroy()end)
+    local fovGui=Instance.new("ScreenGui");fovGui.Name="HyperAimFOVCircleUI";fovGui.ResetOnSpawn=false;fovGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;fovGui.DisplayOrder=-1;fovGui.Parent=PlayerGui
+    self.FovCircle=Instance.new("Frame");self.FovCircle.Name="FOVCircleOutline";self.FovCircle.BackgroundTransparency=1;self.FovCircle.BorderSizePixel=0;self.FovCircle.AnchorPoint=Vector2.new(.5,.5);self.FovCircle.Position=UDim2.new(.5,0,.5,0);self.FovCircle.Visible=HyperAim.Settings.FOV.Enabled and HyperAim.State.Active;self.FovCircle.Parent=fovGui
+    self.FovCircleSegments={}; for i=1,HyperAim.Settings.FOV.NumSegments do local s=Instance.new("Frame");s.Name="S"..i;s.BorderSizePixel=0;s.AnchorPoint=Vector2.new(.5,.5);s.BackgroundColor3=TableToColor3(HyperAim.Settings.FOV.Color);s.BackgroundTransparency=HyperAim.Settings.FOV.Transparency;s.Parent=self.FovCircle;table.insert(self.FovCircleSegments,s)end
 end
 
 function UIManager:_UpdateFOVCircle()
@@ -207,40 +220,38 @@ function UIManager:_UpdateFOVCircle()
     for i,s in ipairs(self.FovCircleSegments) do local a1,a2=(i-1)*ai,i*ai; local x1,y1,x2,y2=r*math.cos(a1),r*math.sin(a1),r*math.cos(a2),r*math.sin(a2); local mx,my,l,rt=(x1+x2)/2,(y1+y2)/2,math.sqrt((x2-x1)^2+(y2-y1)^2),math.atan2(y2-y1,x2-x1); s.Size=UDim2.new(0,l,0,th); s.Position=UDim2.new(.5,mx,.5,my); s.Rotation=math.deg(rt); s.BackgroundColor3=c; s.BackgroundTransparency=tr end
 end
 
--- Event bağlantıları (UI oluşturma helper'ları içinde yapıldı)
+-- Connect Events (Simplified, relies on UI creation connections)
 function UIManager:_ConnectEvents()
-    DisconnectTableConnections(self.Connections); self.Connections={} -- Clear previous module connections
-    -- Master Toggle & UI Toggle (Direct references)
-    if self.MasterToggleButton then self.Connections.masterToggle = self.MasterToggleButton.MouseButton1Click:Connect(function() HyperAim:ToggleActive() end) end
-    if self.ToggleUIBtn then self.Connections.uiToggle = self.ToggleUIBtn.MouseButton1Click:Connect(function() HyperAim:ToggleUIVisibility() end) end
-    -- Save Button
-    if self.SaveButton then self.Connections.save = self.SaveButton.MouseButton1Click:Connect(function() HyperAim.Modules.SettingsManager:_SaveSettings(); local t=self.SaveButton.Text; self.SaveButton.Text="Kaydedildi!"; task.wait(1); if self.SaveButton and self.SaveButton.Parent then self.SaveButton.Text=t end end) end
+    DisconnectTable(self.Connections); self.Connections={} -- Clear previous module connections
+    if self.MasterToggleButton then self.Connections.masterToggle=self.MasterToggleButton.MouseButton1Click:Connect(function()HyperAim:ToggleActive()end)end
+    if self.ToggleUIBtn then self.Connections.uiToggle=self.ToggleUIBtn.MouseButton1Click:Connect(function()HyperAim:ToggleUIVisibility()end)end
+    if self.SaveButton then self.Connections.save=self.SaveButton.MouseButton1Click:Connect(function()HyperAim.Modules.SettingsManager:_SaveSettings();local t=self.SaveButton.Text;self.SaveButton.Text="Kaydedildi!";task.wait(1);if self.SaveButton and self.SaveButton.Parent then self.SaveButton.Text=t end end)end
     -- Dragging (Top Level)
-    if self.TitleBar then HyperAim.Connections.dragBegin=self.TitleBar.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then HyperAim.State.IsDraggingUI=true; HyperAim.State.DragStart=i.Position; if self.MainFrame then HyperAim.State.StartPos=self.MainFrame.Position end; local ch; ch=i.Changed:Connect(function()if i.UserInputState==Enum.UserInputState.End then HyperAim.State.IsDraggingUI=false; SafeDisconnect(ch)end end) end end) end
-    -- Other connections are handled within the helper functions during UI creation
+    if self.TitleBar then HyperAim.Connections.dragBegin=self.TitleBar.InputBegan:Connect(function(i)if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then HyperAim.State.IsDraggingUI=true;HyperAim.State.DragStart=i.Position;if self.MainFrame then HyperAim.State.StartPos=self.MainFrame.Position end;local ch;ch=i.Changed:Connect(function()if i.UserInputState==Enum.UserInputState.End then HyperAim.State.IsDraggingUI=false;SafeDisconnect(ch)end end)end end)end
+    -- Other connections done during creation
 end
 
 function UIManager:SetVisible(visible)
     if not self.MainFrame or not self.MainFrame.Parent then return end
-    local startPos = TableToUDim2(HyperAim.Settings.UI.Position); local goalPos
-    if visible then self.MainFrame.Visible=true; if self.ToggleUIBtn then self.ToggleUIBtn.Text="—" end; goalPos=startPos; TweenService:Create(self.MainFrame,TWEEN_INFO_NORMAL,{Position=goalPos}):Play()
-    else if self.ToggleUIBtn then self.ToggleUIBtn.Text="+" end; goalPos=UDim2.new(startPos.XS,startPos.XO,startPos.YS,startPos.YO-(self.MainFrame.AbsoluteSize.Y+50)); local tw=TweenService:Create(self.MainFrame,TWEEN_INFO_FAST,{Position=goalPos}); tw.Completed:Connect(function(st)if st==Enum.TweenStatus.Completed and not HyperAim.State.UIVisible then if self.MainFrame then self.MainFrame.Visible=false; self.MainFrame.Position=startPos end end end); tw:Play() end
+    local startPos=TableToUDim2(HyperAim.Settings.UI.Position); local goalPos
+    if visible then self.MainFrame.Visible=true;if self.ToggleUIBtn then self.ToggleUIBtn.Text="—"end;goalPos=startPos;TweenService:Create(self.MainFrame,TWEEN_INFO_NORMAL,{Position=goalPos}):Play()
+    else if self.ToggleUIBtn then self.ToggleUIBtn.Text="+"end;goalPos=UDim2.new(startPos.XS,startPos.XO,startPos.YS,startPos.YO-(self.MainFrame.AbsoluteSize.Y+50));local tw=TweenService:Create(self.MainFrame,TWEEN_INFO_FAST,{Position=goalPos});tw.Completed:Connect(function(st)if st==Enum.TweenStatus.Completed and not HyperAim.State.UIVisible then if self.MainFrame then self.MainFrame.Visible=false;self.MainFrame.Position=startPos end end end);tw:Play()end
 end
 
 function UIManager:UpdateStatus(active)
-    if self.StatusLabel and self.StatusLabel.Parent then self.StatusLabel.Text="Durum: "..(active and"Açık"or"Kapalı") end
-    if self.MasterToggleButton and self.MasterToggleButton.Parent then self.MasterToggleButton.Text=active and"Devre Dışı Bırak"or"Aktif Et"; self.MasterToggleButton.BackgroundColor3=active and Color3.fromRGB(110,70,70)or Color3.fromRGB(70,110,90) end
+    if self.StatusLabel and self.StatusLabel.Parent then self.StatusLabel.Text="Durum: "..(active and"Açık"or"Kapalı")end
+    if self.MasterToggleButton and self.MasterToggleButton.Parent then self.MasterToggleButton.Text=active and"Devre Dışı Bırak"or"Aktif Et"; self.MasterToggleButton.BackgroundColor3=active and Color3.fromRGB(110,70,70)or Color3.fromRGB(70,110,90)end
     if self.FovCircle then self.FovCircle.Visible=HyperAim.Settings.FOV.Enabled and active end
 end
 
-function UIManager:Destroy() print("Destroying UIManager..."); DisconnectTableConnections(self.Connections); SafeDisconnect(HyperAim.Connections.dragBegin); HyperAim.Connections.dragBegin=nil; if self.ScreenGui and self.ScreenGui.Parent then pcall(self.ScreenGui.Destroy, self.ScreenGui) end; pcall(function()(PlayerGui:FindFirstChild("HyperAimFOVCircleUI")):Destroy() end); print("UIManager Destroyed.") end
+function UIManager:Destroy() print("Destroying UIManager...");DisconnectTable(self.Connections);SafeDisconnect(HyperAim.Connections.dragBegin);HyperAim.Connections.dragBegin=nil;if self.ScreenGui and self.ScreenGui.Parent then pcall(self.ScreenGui.Destroy,self.ScreenGui)end;pcall(function()(PlayerGui:FindFirstChild("HyperAimFOVCircleUI")):Destroy()end);print("UIManager Destroyed.")end
 
 HyperAim.Modules.UIManager = UIManager
 
 --[[
-    ESP Yöneticisi Modülü (Sadeleştirilmiş)
+    ESP Yöneticisi Modülü (HealthChanged Eventi ile)
 ]]
-local ESPManager = {}; ESPManager.__index = ESPManager; ESPManager.ESPTag = "HyperAimESP"; ESPManager.HEALTH_UPDATE_INTERVAL = 0.5
+local ESPManager = {}; ESPManager.__index = ESPManager; ESPManager.ESPTag = "HyperAimESP"; ESPManager.HEALTH_UPDATE_INTERVAL = 2 -- Fallback update interval (longer)
 
 function ESPManager.new() local self=setmetatable({}, {__index=ESPManager}); self.Connections={}; self.ActiveESPs={}; self.LastGlobalUpdate=0; self:_Initialize(); return self end
 function ESPManager:_Initialize()
@@ -248,67 +259,86 @@ function ESPManager:_Initialize()
     self.Connections.pAdd=Players.PlayerAdded:Connect(function(p)local uid=p.UserId;self.Connections["cA"..uid]=p.CharacterAdded:Connect(function(c)task.wait(.5);if HyperAim.Modules.TargetingSystem:IsPotentialTarget(p)then self:CreateESP(c)end end)end)
     self.Connections.pRem=Players.PlayerRemoving:Connect(function(p)self:RemoveESP(p)end)
     for _,p in ipairs(Players:GetPlayers())do if p~=LocalPlayer then local uid=p.UserId;self.Connections["cA"..uid]=p.CharacterAdded:Connect(function(c)task.wait(.5);if HyperAim.Modules.TargetingSystem:IsPotentialTarget(p)then self:CreateESP(c)end end);if p.Character and HyperAim.Modules.TargetingSystem:IsPotentialTarget(p)then self:CreateESP(p.Character)end end end
-    self.Connections.hUpd=RunService.Heartbeat:Connect(function()self:UpdateAllHealthBars()end)
+    self.Connections.hUpd=RunService.Heartbeat:Connect(function()self:UpdateAllHealthBarsFallback()end) -- Fallback updater
 end
 function ESPManager:CreateESP(char)
     local p=Players:GetPlayerFromCharacter(char); local h=char and char:FindFirstChildOfClass("Humanoid"); if not p or not h or self.ActiveESPs[p] or not char:IsA("Model")then return end; local head=char:FindFirstChild("Head"); if not head then return end; pcall(function()head:FindFirstChild(self.ESPTag):Destroy()end)
-    local sESP,sFOV=HyperAim.Settings.ESP,HyperAim.Settings.FOV; local gui=Instance.new("BillboardGui");gui.Name=self.ESPTag;gui.Adornee=head;gui.Size=UDim2.new(0,60,0,20);gui.StudsOffsetWorldSpace=Vector3.new(0,1.5,0);gui.AlwaysOnTop=true;gui.Enabled=sESP.Enabled and HyperAim.State.Active;gui.Parent=head
+    local sESP=HyperAim.Settings.ESP; local gui=Instance.new("BillboardGui");gui.Name=self.ESPTag;gui.Adornee=head;gui.Size=UDim2.new(0,60,0,20);gui.StudsOffsetWorldSpace=Vector3.new(0,1.5,0);gui.AlwaysOnTop=true;gui.Enabled=sESP.Enabled and HyperAim.State.Active;gui.Parent=head
     local dot=Instance.new("Frame");dot.Name="Dot";dot.Size=UDim2.fromOffset(sESP.Size.X,sESP.Size.Y);dot.Position=UDim2.new(.5,0,0,-sESP.Size.Y-2);dot.AnchorPoint=Vector2.new(.5,1);dot.BackgroundColor3=TableToColor3(sESP.Color);dot.BorderSizePixel=0;dot.Visible=sESP.DotEnabled;dot.Parent=gui
     local hBg=Instance.new("Frame");hBg.Name="HBBg";hBg.Size=UDim2.fromOffset(sESP.HealthBarSize.Width,sESP.HealthBarSize.Height);hBg.Position=UDim2.new(.5,0,1,2);hBg.AnchorPoint=Vector2.new(.5,0);hBg.BackgroundColor3=TableToColor3(sESP.HealthBarBackgroundColor);hBg.BorderSizePixel=1;hBg.BorderColor3=Color3.new(0,0,0);hBg.Visible=sESP.HealthBarEnabled;hBg.Parent=gui
     local hFg=Instance.new("Frame");hFg.Name="HBFg";hFg.Size=UDim2.new(1,0,1,0);hFg.BackgroundColor3=TableToColor3(sESP.HealthBarColor);hFg.BorderSizePixel=0;hFg.Parent=hBg
-    local d={G=gui,P=p,H=h,D=dot,HBg=hBg,HFg=hFg,LHU=0}; self.ActiveESPs[p]=d; self:_UpdateHealthBar(d)
-    local uid=p.UserId; local dk,dsK="d"..uid,"ds"..char:GetFullName(); SafeDisconnect(self.Connections[dk]); SafeDisconnect(self.Connections[dsK])
-    self.Connections[dk]=h.Died:Connect(function()self:RemoveESP(p)end); self.Connections[dsK]=char.Destroying:Connect(function()self:RemoveESP(p)end)
+    local d={G=gui,P=p,H=h,D=dot,HBg=hBg,HFg=hFg,LHU=0, HealthConn=nil, DiedConn=nil, DestroyConn=nil} -- Store connections within data
+    self.ActiveESPs[p]=d; self:_UpdateHealthBar(d, true) -- Force update on create
+    -- Connect events directly to the ESP data table
+    d.DiedConn = h.Died:Connect(function()self:RemoveESP(p)end)
+    d.DestroyConn = char.Destroying:Connect(function()self:RemoveESP(p)end)
+    d.HealthConn = h.HealthChanged:Connect(function(newHealth) self:_UpdateHealthBar(d) end) -- Connect health changed
 end
-function ESPManager:RemoveESP(p) if not p then return end; local uid=p.UserId; local d=self.ActiveESPs[p]; if d then pcall(d.G.Destroy,d.G); self.ActiveESPs[p]=nil end; SafeDisconnect(self.Connections["cA"..uid]);self.Connections["cA"..uid]=nil; SafeDisconnect(self.Connections["d"..uid]);self.Connections["d"..uid]=nil; if HyperAim.State.LockedTarget and p.Character and HyperAim.State.LockedTarget.Parent==p.Character then HyperAim:ClearLock("ESP: Target removed")end end
+function ESPManager:RemoveESP(p)
+    if not p then return end; local d=self.ActiveESPs[p]
+    if d then
+        SafeDisconnect(d.HealthConn); SafeDisconnect(d.DiedConn); SafeDisconnect(d.DestroyConn) -- Disconnect specific ESP events
+        pcall(d.G.Destroy, d.G); self.ActiveESPs[p]=nil
+    end
+    local uid=p.UserId; SafeDisconnect(self.Connections["cA"..uid]); self.Connections["cA"..uid]=nil -- Disconnect CharacterAdded
+    if HyperAim.State.LockedTarget and p.Character and HyperAim.State.LockedTarget.Parent==p.Character then HyperAim:ClearLock("ESP: Target removed")end
+end
 function ESPManager:UpdateESPElementVisibility() local s=HyperAim.Settings.ESP; local a=s.Enabled and HyperAim.State.Active; for _,d in pairs(self.ActiveESPs)do if d.G and d.G.Parent then d.G.Enabled=a; if d.D then d.D.Visible=s.DotEnabled end; if d.HBg then d.HBg.Visible=s.HealthBarEnabled end end end end
-function ESPManager:_UpdateHealthBar(d) if not d or not d.H or not d.H.Parent or not d.HFg or not d.HFg.Parent then if d and d.P then self:RemoveESP(d.P)end; return end; local h,mH=d.H.Health,d.H.MaxHealth; if mH<=0 then return end; local p=math.clamp(h/mH,0,1); d.HFg.Size=UDim2.new(p,0,1,0); d.LHU=tick() end
-function ESPManager:UpdateAllHealthBars() local s=HyperAim.Settings.ESP; if not HyperAim.State.Active or not s.Enabled or not s.HealthBarEnabled then return end; local n=tick(); if n-self.LastGlobalUpdate<self.HEALTH_UPDATE_INTERVAL then return end; self.LastGlobalUpdate=n; for _,d in pairs(self.ActiveESPs)do self:_UpdateHealthBar(d)end end
+function ESPManager:_UpdateHealthBar(d, force) -- Added force parameter
+    if not d or not d.H or not d.H.Parent or not d.HFg or not d.HFg.Parent then if d and d.P then self:RemoveESP(d.P)end; return end
+    if not force and tick() - d.LHU < 0.1 then return end -- Throttle individual updates slightly even with event
+    local h,mH=d.H.Health,d.H.MaxHealth; if mH<=0 then return end
+    local p=math.clamp(h/mH,0,1); d.HFg.Size=UDim2.new(p,0,1,0); d.LHU=tick()
+end
+-- Fallback updater in case HealthChanged event fails
+function ESPManager:UpdateAllHealthBarsFallback() local s=HyperAim.Settings.ESP; if not HyperAim.State.Active or not s.Enabled or not s.HealthBarEnabled then return end; local n=tick(); if n-self.LastGlobalUpdate<self.HEALTH_UPDATE_INTERVAL then return end; self.LastGlobalUpdate=n; for _,d in pairs(self.ActiveESPs)do self:_UpdateHealthBar(d, true)end end -- Force update in fallback
 function ESPManager:SetESPVisibility(v) HyperAim.Settings.ESP.Enabled=v; self:UpdateESPElementVisibility() end
 function ESPManager:UpdateESPColor(c3) HyperAim.Settings.ESP.Color=Color3ToTable(c3); local c=c3; for _,d in pairs(self.ActiveESPs)do if d.D and d.D.Parent then d.D.BackgroundColor3=c end end end
-function ESPManager:Destroy() print("Destroying ESP..."); DisconnectTable(self.Connections); for _,d in pairs(self.ActiveESPs)do if d.G then pcall(d.G.Destroy,d.G)end end; self.ActiveESPs={}; print("ESP Destroyed.") end
+function ESPManager:Destroy() print("Destroying ESP..."); DisconnectTable(self.Connections); for p,_ in pairs(self.ActiveESPs)do self:RemoveESP(p)end; self.ActiveESPs={}; print("ESP Destroyed.") end
 
 HyperAim.Modules.ESPManager = ESPManager
 
 --[[
-    Bunnyhop Manager Modülü (Sadeleştirilmiş)
+    Bunnyhop Manager Modülü (Robust)
 ]]
 local BunnyhopManager = {}; BunnyhopManager.__index = BunnyhopManager
 
-function BunnyhopManager.new() local self=setmetatable({}, {__index=BunnyhopManager}); self.Connections={}; self.Holding=false; self:_Init(); return self end
-function BunnyhopManager:_Init() DisconnectTable(self.Connections); self.Connections={}; local k=HyperAim.Settings.Bunnyhop.Key; self.Connections.b=UserInputService.InputBegan:Connect(function(i,gp)if not gp and i.KeyCode==k then self.Holding=true end end); self.Connections.e=UserInputService.InputEnded:Connect(function(i,gp)if i.KeyCode==k then self.Holding=false end end); self.Connections.l=RunService.Heartbeat:Connect(function()self:_Update()end) end
-function BunnyhopManager:_Update() if not HyperAim.State.Active or not HyperAim.Settings.Bunnyhop.Enabled or not self.Holding then return end; local c=LocalPlayer.Character; if not c then return end; local h=c:FindFirstChildOfClass("Humanoid"); if not h or h:GetState()==Enum.HumanoidStateType.Dead then return end; if h.FloorMaterial~=Enum.Material.Air then pcall(function()h.Jump=true end)end end
-function BunnyhopManager:Destroy() print("Destroying BH..."); DisconnectTable(self.Connections); print("BH Destroyed.") end
+function BunnyhopManager.new() local self=setmetatable({},{__index=BunnyhopManager});self.Connections={};self.Holding=false;self:_Init();return self end
+function BunnyhopManager:_Init() DisconnectTable(self.Connections);self.Connections={}; local k=HyperAim.Settings.Bunnyhop.Key; self.Connections.b=UserInputService.InputBegan:Connect(function(i,gp)if not gp and i.KeyCode==k then self.Holding=true end end); self.Connections.e=UserInputService.InputEnded:Connect(function(i,gp)if i.KeyCode==k then self.Holding=false end end); self.Connections.l=RunService.Heartbeat:Connect(function()self:_Update()end) end
+function BunnyhopManager:_Update() if not HyperAim.State.Active or not HyperAim.Settings.Bunnyhop.Enabled or not self.Holding then return end; local c=LocalPlayer.Character; if not c then return end; local h=c:FindFirstChildOfClass("Humanoid"); if not h then return end; local state=h:GetState(); if state==Enum.HumanoidStateType.Dead or state==Enum.HumanoidStateType.Seated or state==Enum.HumanoidStateType.PlatformStanding then return end; if h.FloorMaterial~=Enum.Material.Air then pcall(function()h.Jump=true end)end end
+function BunnyhopManager:Destroy() print("Destroying BH...");DisconnectTable(self.Connections);print("BH Destroyed.") end
 
 HyperAim.Modules.BunnyhopManager = BunnyhopManager
 
 --[[
-    Hedefleme Sistemi Modülü (Sadeleştirilmiş)
+    Hedefleme Sistemi Modülü (Robust)
 ]]
 local TargetingSystem = {}; TargetingSystem.__index = TargetingSystem
 
-function TargetingSystem.new() local s=setmetatable({},{__index=TargetingSystem}); s.RP=RaycastParams.new(); s.RP.FilterType=Enum.RaycastFilterType.Blacklist; s.RP.FilterDescendantsInstances={LocalPlayer.Character,Camera}; s.RP.IgnoreWater=true; return s end
+function TargetingSystem.new() local s=setmetatable({},{__index=TargetingSystem});s.RP=RaycastParams.new();s.RP.FilterType=Enum.RaycastFilterType.Blacklist;s.RP.FilterDescendantsInstances={LocalPlayer.Character,Camera};s.RP.IgnoreWater=true;return s end
 function TargetingSystem:IsPotential(p) if not p or p==LocalPlayer or not p.Character or not p.Character.Parent then return false end; local c=p.Character; if HyperAim.Settings.TeamCheck then local lt,pt=LocalPlayer.Team,p.Team; if not lt or not pt or pt==lt then return false end end; local h=c:FindFirstChildOfClass("Humanoid"); if not h or h.Health<=0 then return false end; if not GetTargetPart(c,HyperAim.Settings.TargetPart)then return false end; return true end
-function TargetingSystem:IsVisible(tp) if not tp or not tp:IsA("BasePart") or not tp.Parent then return false end; local o,t=Camera.CFrame.Position,tp.Position; local d=(t-o); local dist=d.Magnitude; if dist<0.1 or dist>HyperAim.Settings.MaxDistance then return false end; local ig={LocalPlayer.Character,Camera,tp.Parent}; pcall(function()local ui=PlayerGui:FindFirstChild("HyperAimUI");if ui then table.insert(ig,ui)end end); pcall(function()local fov=PlayerGui:FindFirstChild("HyperAimFOVCircleUI");if fov then table.insert(ig,fov)end end); self.RP.FilterDescendantsInstances=ig; local r=workspace:Raycast(o,d.Unit*dist,self.RP); return not r end
+function TargetingSystem:IsVisible(tp) if not tp or not tp:IsA("BasePart")or not tp.Parent then return false end; local o,t=Camera.CFrame.Position,tp.Position; local d=(t-o); local dist=d.Magnitude; if dist<0.1 or dist>HyperAim.Settings.MaxDistance then return false end; local ig={LocalPlayer.Character,Camera,tp.Parent}; pcall(function()local ui=PlayerGui:FindFirstChild("HyperAimUI");if ui then table.insert(ig,ui)end end); pcall(function()local fov=PlayerGui:FindFirstChild("HyperAimFOVCircleUI");if fov then table.insert(ig,fov)end end); self.RP.FilterDescendantsInstances=ig; local r=workspace:Raycast(o,d.Unit*dist,self.RP); return not r end
 function TargetingSystem:InFOV(sp) if not HyperAim.Settings.FOV.Enabled or not sp then return true end; local vp=Camera.ViewportSize; if not vp or vp.X==0 then return false end; local c=Vector2.new(vp.X/2,vp.Y/2); return(sp-c).Magnitude<=HyperAim.Settings.FOV.Radius end
 function TargetingSystem:FindTarget()
     local bestTgt,bestV=nil,(HyperAim.Settings.DistancePriority=="Closest")and math.huge or 0; local vp=Camera.ViewportSize; if not vp or vp.X==0 then return nil end; local sc=Vector2.new(vp.X/2,vp.Y/2)
-    if HyperAim.State.LockedTarget and HyperAim.State.LockedTarget.Parent then local lc=HyperAim.State.LockedTarget.Parent; local p=Players:GetPlayerFromCharacter(lc); if p and self:IsPotential(p)then local clp=GetTargetPart(lc,HyperAim.Settings.TargetPart); if clp and self:IsVisible(clp)then local sp,os=Camera:WorldToViewportPoint(clp.Position); if os and self:InFOV(Vector2.new(sp.X,sp.Y))then return clp else HyperAim:ClearLock("Lock Invalid: FOV/Screen/Obstructed")end else HyperAim:ClearLock("Lock Invalid: Part/Visibility")end else HyperAim:ClearLock("Lock Invalid: Player")end end
-    for _,p in ipairs(Players:GetPlayers())do if self:IsPotential(p)then local c=p.Character; local tp=GetTargetPart(c,HyperAim.Settings.TargetPart); if tp then local sp,os=Camera:WorldToViewportPoint(tp.Position); if os then local sv=Vector2.new(sp.X,sp.Y); if self:InFOV(sv)and self:IsVisible(tp)then local dist=(tp.Position-Camera.CFrame.Position).Magnitude; if HyperAim.Settings.DistancePriority=="Closest"then if dist<bestV then bestV=dist;bestTgt=tp end else if dist>bestV then bestV=dist;bestTgt=tp end end end end end end end
+    if HyperAim.State.LockedTarget and HyperAim.State.LockedTarget.Parent then local lc=HyperAim.State.LockedTarget.Parent; local p=Players:GetPlayerFromCharacter(lc); if p and self:IsPotential(p)then local clp=GetTargetPart(lc,HyperAim.Settings.TargetPart); if clp and self:IsVisible(clp)then local sp,os=pcall(Camera.WorldToViewportPoint, Camera, clp.Position); if os and sp and self:InFOV(Vector2.new(sp.X,sp.Y))then return clp else HyperAim:ClearLock("Lock Invalid: FOV/Screen/Obstructed")end else HyperAim:ClearLock("Lock Invalid: Part/Visibility")end else HyperAim:ClearLock("Lock Invalid: Player")end end
+    for _,p in ipairs(Players:GetPlayers())do if self:IsPotential(p)then local c=p.Character; local tp=GetTargetPart(c,HyperAim.Settings.TargetPart); if tp then local sp,os=pcall(Camera.WorldToViewportPoint, Camera, tp.Position); if os and sp then local sv=Vector2.new(sp.X,sp.Y); if self:InFOV(sv)and self:IsVisible(tp)then local dist=(tp.Position-Camera.CFrame.Position).Magnitude; if HyperAim.Settings.DistancePriority=="Closest"then if dist<bestV then bestV=dist;bestTgt=tp end else if dist>bestV then bestV=dist;bestTgt=tp end end end end end end end
     if bestTgt then HyperAim:SetLock(bestTgt)end; return bestTgt
 end
 
 HyperAim.Modules.TargetingSystem = TargetingSystem
 
 --[[
-    Nişan Alma Yardımı Modülü (Sadeleştirilmiş, Prediction Kaldırıldı)
+    Nişan Alma Yardımı Modülü (Prediction Geri Eklendi, Robust)
 ]]
 local AimAssist = {}; AimAssist.__index = AimAssist
 
 function AimAssist.new() return setmetatable({}, {__index=AimAssist}) end
-function AimAssist:UpdateAim() -- Removed deltaTime
+function AimAssist:UpdateAim() -- Removed deltaTime, prediction uses simple offset
     local tp=HyperAim.State.CurrentTarget; if not tp or not tp.Parent or not tp:IsA("BasePart")then return end
     local tPos=tp.Position; local cCF=Camera.CFrame; local cPos=cCF.Position; local cLook=cCF.LookVector
+    -- Prediction (Optional & Simple)
+    if HyperAim.Settings.Prediction.Enabled then local s,v=pcall(function()return tp.AssemblyLinearVelocity end); if s and v and v.Magnitude > 1 then tPos=tPos+(v*HyperAim.Settings.Prediction.Factor)end end -- Only predict if moving significantly
     local tVec=(tPos-cPos); if tVec.Magnitude<0.1 then return end; tVec=tVec.Unit
     local angDiff=math.acos(math.clamp(cLook:Dot(tVec),-1,1)); if math.deg(angDiff)<HyperAim.Settings.AimDeadzone then return end
     local dAlpha=math.clamp(angDiff/HyperAim.Settings.DynamicSmoothingFactor,HyperAim.Settings.MinSmoothingAlpha,HyperAim.Settings.MaxSmoothingAlpha); local alpha=dAlpha
@@ -319,7 +349,7 @@ end
 HyperAim.Modules.AimAssist = AimAssist
 
 --[[
-    Ana Kontrol Fonksiyonları ve Döngü (Sadeleştirilmiş)
+    Ana Kontrol Fonksiyonları ve Döngü (Robust)
 ]]
 function HyperAim:ToggleActive() self.State.Active=not self.State.Active; local a=self.State.Active; if self.Modules.UIManager then self.Modules.UIManager:UpdateStatus(a)end; if self.Modules.ESPManager then self.Modules.ESPManager:SetESPVisibility(self.Settings.ESP.Enabled)end; if not a then self.State.CurrentTarget,self.State.LockedTarget=nil,nil end; if self.Modules.UIManager then self.Modules.UIManager:_UpdateFOVCircle()end; print("HyperAim",(a and"Aktif"or"Devre Dışı")) end
 function HyperAim:ToggleUIVisibility() self.State.UIVisible=not self.State.UIVisible; if self.Modules.UIManager then self.Modules.UIManager:SetVisible(self.State.UIVisible)end; print("HyperAim UI",(self.State.UIVisible and"Gösteriliyor"or"Gizlendi")) end
@@ -333,29 +363,31 @@ function HyperAim:SetLock(tp) if tp and tp:IsA("BasePart")and tp.Parent and tp~=
 function HyperAim:ClearLock(reason) if self.State.LockedTarget then self.State.LockedTarget=nil; print("Lock cleared.",reason or"")end end
 
 function HyperAim:Initialize()
-    print("HyperAim v0.4.5_CodeDecrease Başlatılıyor...")
+    print("HyperAim v0.5 Başlatılıyor...")
     SettingsManager:_LoadSettings()
-    local ui=UIManager.new(); if not ui then warn("UIManager başlatılamadı!"); return end; self.Modules.UIManager=ui
+    local ui=UIManager.new(); if not ui then warn("UIManager başlatılamadı!"); return false end; self.Modules.UIManager=ui
     self.Modules.TargetingSystem=TargetingSystem.new(); self.Modules.ESPManager=ESPManager.new(); self.Modules.AimAssist=AimAssist.new(); self.Modules.BunnyhopManager=BunnyhopManager.new(); self.Modules.SettingsManager=SettingsManager
     -- Connect top-level events
     if UserInputService then self.Connections.lck=UserInputService.InputBegan:Connect(function(i,gp)if not gp and i.KeyCode==self.Settings.LockOnClearKey then self:ClearLock("Manual")end end); self.Connections.dM=UserInputService.InputChanged:Connect(function(i)if self.State.IsDraggingUI and(i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch)then if self.State.DragStart and self.State.StartPos and self.Modules.UIManager and self.Modules.UIManager.MainFrame then local d=i.Position-self.State.DragStart; self.Modules.UIManager.MainFrame.Position=UDim2.new(self.State.StartPos.XS,self.State.StartPos.XO+d.X, self.State.StartPos.YS,self.State.StartPos.YO+d.Y)else self.State.IsDraggingUI=false end end end); self.Connections.dE=UserInputService.InputEnded:Connect(function(i)if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then self.State.IsDraggingUI=false end end) end
     -- Connect Heartbeat
-    if RunService then self.Connections.hb=RunService.Heartbeat:Connect(function() if not self.State.Active then self.State.CurrentTarget=nil; return end; local s,e=pcall(function()self.State.CurrentTarget=self.Modules.TargetingSystem:FindTarget(); if self.State.CurrentTarget then self.Modules.AimAssist:UpdateAim()end; if self.Settings.FOV.Enabled and self.Modules.UIManager then self.Modules.UIManager:_UpdateFOVCircle()end end); if not s then warn("HB Err:",e)end end) end
-    print("HyperAim v0.4.5_CodeDecrease Başlatıldı.")
+    if RunService then self.Connections.hb=RunService.Heartbeat:Connect(function(dt) if not self.State.Active then self.State.CurrentTarget=nil; return end; local s,e=pcall(function()self.State.CurrentTarget=self.Modules.TargetingSystem:FindTarget(); if self.State.CurrentTarget then self.Modules.AimAssist:UpdateAim()end; if self.Settings.FOV.Enabled and self.Modules.UIManager then self.Modules.UIManager:_UpdateFOVCircle()end end); if not s then warn("HB Err:",e)end end) end
+    print("HyperAim v0.5 Başlatıldı.")
+    return true -- Indicate successful initialization
 end
 
 function HyperAim:Destroy()
-    print("HyperAim v0.4.5_CodeDecrease Durduruluyor...")
+    print("HyperAim v0.5 Durduruluyor...")
     if self.Modules.SettingsManager then pcall(self.Modules.SettingsManager._SaveSettings) end
     DisconnectTable(self.Connections); self.Connections={}
     if self.Modules.UIManager then pcall(self.Modules.UIManager.Destroy, self.Modules.UIManager); self.Modules.UIManager=nil end
     if self.Modules.ESPManager then pcall(self.Modules.ESPManager.Destroy, self.Modules.ESPManager); self.Modules.ESPManager=nil end
     if self.Modules.BunnyhopManager then pcall(self.Modules.BunnyhopManager.Destroy, self.Modules.BunnyhopManager); self.Modules.BunnyhopManager=nil end
     self.State.CurrentTarget,self.State.LockedTarget,self.State.Active=nil,nil,false
-    print("HyperAim v0.4.5_CodeDecrease Durduruldu.")
+    print("HyperAim v0.5 Durduruldu.")
 end
 
 -- Script Execution Start
-local success, err = pcall(HyperAim.Initialize, HyperAim)
+local initialized = false
+local success, err = pcall(function() initialized = HyperAim:Initialize() end)
 if not success then warn("HyperAim Başlatma Hatası:", err)
-else if script then script.Destroying:Connect(function() pcall(HyperAim.Destroy, HyperAim) end) end end
+elseif initialized and script then script.Destroying:Connect(function() pcall(HyperAim.Destroy, HyperAim) end) end
